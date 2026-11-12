@@ -7,6 +7,8 @@
 #include "hz-util.h"
 
 #include <math.h>
+#include <stdio.h>
+#include <string.h>
 #include <util/bmem.h>
 
 #define S_HALFTONE "halftone"

@@ -6,6 +6,7 @@
 #include "hz-util.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 void hz_pingpong_init(struct hz_pingpong *pp, enum gs_color_format fmt)
