@@ -1,0 +1,79 @@
+// obs-harmonizer 共通定義
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+uniform float4x4 ViewProj;
+
+sampler_state pointClamp {
+	Filter   = Point;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData v_out;
+	v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	v_out.uv  = v_in.uv;
+	return v_out;
+}
+
+float3 hz_srgb_to_lin(float3 c)
+{
+	float3 lo = c / 12.92;
+	float3 hi = pow(max((c + 0.055) / 1.055, float3(0.0, 0.0, 0.0)), float3(2.4, 2.4, 2.4));
+	return float3(c.r <= 0.04045 ? lo.r : hi.r,
+		      c.g <= 0.04045 ? lo.g : hi.g,
+		      c.b <= 0.04045 ? lo.b : hi.b);
+}
+
+float3 hz_lin_to_srgb(float3 c)
+{
+	c = max(c, float3(0.0, 0.0, 0.0));
+	float3 lo = c * 12.92;
+	float3 hi = 1.055 * pow(c, float3(1.0 / 2.4, 1.0 / 2.4, 1.0 / 2.4)) - 0.055;
+	return float3(c.r <= 0.0031308 ? lo.r : hi.r,
+		      c.g <= 0.0031308 ? lo.g : hi.g,
+		      c.b <= 0.0031308 ? lo.b : hi.b);
+}
+
+float hz_luma(float3 c)
+{
+	return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+// 知覚輝度（線形輝度を 1/2.2 乗）
+float hz_lp(float3 lin)
+{
+	return pow(max(hz_luma(lin), 0.0), 1.0 / 2.2);
+}
+
+float4 hz_unpremul(float4 c)
+{
+	c.rgb *= (c.a > 0.0) ? (1.0 / c.a) : 0.0;
+	return c;
+}
+
+// 色度（輝度 1 に正規化した色）。1 からのずれを limit までに抑える
+float3 hz_chroma(float3 c, float limit)
+{
+	c = c / max(hz_luma(c), 0.0001);
+	float3 d = abs(c - float3(1.0, 1.0, 1.0));
+	float dev = max(max(d.r, d.g), d.b);
+	return float3(1.0, 1.0, 1.0) + (c - float3(1.0, 1.0, 1.0)) * min(1.0, limit / max(dev, 0.0001));
+}
+
+float3 hz_screen(float3 a, float3 b)
+{
+	return float3(1.0, 1.0, 1.0) - (float3(1.0, 1.0, 1.0) - a) * (float3(1.0, 1.0, 1.0) - saturate(b));
+}

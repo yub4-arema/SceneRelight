@@ -1,0 +1,219 @@
+// obs-harmonizer 前処理パス
+//   Blocks / BlocksSq : 256x144 の背景 -> 32x18 のブロック平均
+//   Stats             : 32x18 -> 4x1 の統計（時間平滑つき）
+//   BlurH / BlurV     : 32x18 の環境光マップをぼかす（BlurV で時間平滑）
+//   FgStats           : 32x32 の前景 -> 1x1 の統計（時間平滑つき）
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include "common.effect"
+
+uniform texture2d image;     // 入力
+uniform texture2d image2;    // 2つ目の入力（BlocksSq の結果など）
+uniform texture2d prev;      // 前フレームの結果（時間平滑用）
+uniform float2 texel;        // 入力の 1 テクセル
+uniform float blend;         // 時間平滑：今回の値の重み（1 で平滑なし）
+uniform float sigma;         // ぼかしの標準偏差（セル）
+
+// ---------------------------------------------------------------- Blocks
+// 1 出力ピクセル = 入力 8x8。rgb = 線形の平均色, a = 知覚輝度の平均
+
+float4 PSBlocks(VertData v) : TARGET
+{
+	float3 acc = float3(0.0, 0.0, 0.0);
+	float lp = 0.0;
+	for (int j = 0; j < 8; j++) {
+		for (int i = 0; i < 8; i++) {
+			float2 uv = v.uv + (float2(float(i), float(j)) - 3.5) * texel;
+			float3 c = hz_srgb_to_lin(hz_unpremul(image.SampleLevel(pointClamp, uv, 0.0)).rgb);
+			acc += c;
+			lp += hz_lp(c);
+		}
+	}
+	return float4(acc / 64.0, lp / 64.0);
+}
+
+// r = 知覚輝度の 2 乗の平均
+float4 PSBlocksSq(VertData v) : TARGET
+{
+	float lp2 = 0.0;
+	for (int j = 0; j < 8; j++) {
+		for (int i = 0; i < 8; i++) {
+			float2 uv = v.uv + (float2(float(i), float(j)) - 3.5) * texel;
+			float3 c = hz_srgb_to_lin(hz_unpremul(image.SampleLevel(pointClamp, uv, 0.0)).rgb);
+			float l = hz_lp(c);
+			lp2 += l * l;
+		}
+	}
+	return float4(lp2 / 64.0, 0.0, 0.0, 1.0);
+}
+
+// ---------------------------------------------------------------- Stats
+// 出力 4x1:
+//   0: (平均色 rgb, 知覚輝度の平均)
+//   1: (ハイライト色 rgb, 知覚輝度の標準偏差)
+//   2: (暗部の色 rgb, 1)
+//   3: (明るい所の重心 uv, 0, 1)
+
+float4 PSStats(VertData v) : TARGET
+{
+	float3 mean = float3(0.0, 0.0, 0.0);
+	float3 hi = float3(0.0, 0.0, 0.0);
+	float3 lo = float3(0.0, 0.0, 0.0);
+	float2 hiuv = float2(0.0, 0.0);
+	float mlp = 0.0;
+	float mlp2 = 0.0;
+	float whi = 0.0;
+	float whi8 = 0.0;
+	float wlo = 0.0;
+	for (int y = 0; y < 18; y++) {
+		for (int x = 0; x < 32; x++) {
+			float2 uv = (float2(float(x), float(y)) + 0.5) / float2(32.0, 18.0);
+			float4 a = image.SampleLevel(pointClamp, uv, 0.0);
+			float b = image2.SampleLevel(pointClamp, uv, 0.0).r;
+			mean += a.rgb;
+			mlp += a.a;
+			mlp2 += b;
+			float l2 = a.a * a.a;
+			float wh = l2 * l2 + 0.000001;
+			hi += a.rgb * wh;
+			hiuv += uv * wh * wh; // 明るい所の重心は 8 乗で鋭く
+			whi += wh;
+			whi8 += wh * wh;
+			float d = 1.0 - a.a;
+			float d2 = d * d;
+			float wl = d2 * d2 + 0.000001;
+			lo += a.rgb * wl;
+			wlo += wl;
+		}
+	}
+	float n = 32.0 * 18.0;
+	mean /= n;
+	mlp /= n;
+	mlp2 /= n;
+	float sd = sqrt(max(mlp2 - mlp * mlp, 0.000001));
+
+	float idx = floor(v.uv.x * 4.0);
+	float4 cur;
+	if (idx < 0.5)
+		cur = float4(mean, mlp);
+	else if (idx < 1.5)
+		cur = float4(hi / whi, sd);
+	else if (idx < 2.5)
+		cur = float4(lo / wlo, 1.0);
+	else
+		cur = float4(hiuv / whi8, 0.0, 1.0);
+
+	float4 p = prev.SampleLevel(pointClamp, v.uv, 0.0);
+	return lerp(p, cur, blend);
+}
+
+// ---------------------------------------------------------------- Blur
+
+float hz_gauss(float i)
+{
+	return (sigma > 0.01) ? exp(-0.5 * (i * i) / (sigma * sigma)) : ((abs(i) < 0.5) ? 1.0 : 0.0);
+}
+
+float4 PSBlurH(VertData v) : TARGET
+{
+	float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+	float ws = 0.0;
+	for (int i = -12; i <= 12; i++) {
+		float w = hz_gauss(float(i));
+		acc += image.SampleLevel(pointClamp, v.uv + float2(float(i) * texel.x, 0.0), 0.0) * w;
+		ws += w;
+	}
+	return acc / ws;
+}
+
+float4 PSBlurV(VertData v) : TARGET
+{
+	float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+	float ws = 0.0;
+	for (int i = -12; i <= 12; i++) {
+		float w = hz_gauss(float(i));
+		acc += image.SampleLevel(pointClamp, v.uv + float2(0.0, float(i) * texel.y), 0.0) * w;
+		ws += w;
+	}
+	float4 p = prev.SampleLevel(pointClamp, v.uv, 0.0);
+	return lerp(p, acc / ws, blend);
+}
+
+// ---------------------------------------------------------------- FgStats
+// 出力 1x1: (知覚輝度の平均, 標準偏差, alpha の平均, 1)
+
+float4 PSFgStats(VertData v) : TARGET
+{
+	float sa = 0.0;
+	float s1 = 0.0;
+	float s2 = 0.0;
+	for (int y = 0; y < 32; y++) {
+		for (int x = 0; x < 32; x++) {
+			float2 uv = (float2(float(x), float(y)) + 0.5) / 32.0;
+			float4 c = hz_unpremul(image.SampleLevel(pointClamp, uv, 0.0));
+			float l = hz_lp(hz_srgb_to_lin(c.rgb));
+			sa += c.a;
+			s1 += l * c.a;
+			s2 += l * l * c.a;
+		}
+	}
+	float m = s1 / max(sa, 0.000001);
+	float sd = sqrt(max(s2 / max(sa, 0.000001) - m * m, 0.000001));
+	float4 cur = (sa > 0.001) ? float4(m, sd, sa / 1024.0, 1.0) : float4(0.5, 0.2, 0.0, 1.0);
+	float4 p = prev.SampleLevel(pointClamp, v.uv, 0.0);
+	return lerp(p, cur, blend);
+}
+
+technique Blocks
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlocks(v);
+	}
+}
+
+technique BlocksSq
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlocksSq(v);
+	}
+}
+
+technique Stats
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSStats(v);
+	}
+}
+
+technique BlurH
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlurH(v);
+	}
+}
+
+technique BlurV
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlurV(v);
+	}
+}
+
+technique FgStats
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSFgStats(v);
+	}
+}
