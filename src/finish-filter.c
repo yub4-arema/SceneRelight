@@ -146,7 +146,7 @@ static obs_properties_t *fin_properties(void *data)
 	obs_property_set_modified_callback(lac, leak_autocolor_changed);
 	obs_properties_add_color(lk, S_LEAK_COLOR, obs_module_text("Finish.LeakColor"));
 	obs_property_t *ls = obs_properties_add_float_slider(lk, S_LEAK_SMOOTH, obs_module_text("Finish.LeakSmoothing"),
-							      0.0, 10.0, 0.1);
+							     0.0, 10.0, 0.1);
 	obs_property_float_set_suffix(ls, " s");
 	obs_properties_add_group(props, "leak_group", obs_module_text("Finish.LeakGroup"), OBS_GROUP_NORMAL, lk);
 

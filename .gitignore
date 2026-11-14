@@ -1,5 +1,4 @@
 /build/
-/build-*/
 /build_*/
 # テスト用の素材は再配布できないものがあるので入れない
 test-assets/

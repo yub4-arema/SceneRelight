@@ -86,7 +86,7 @@ struct harmonizer {
 
 	/* フレームごとの状態 */
 	float dt;
-	bool processed; /* このフレームの前処理を済ませたか */
+	bool processed;    /* このフレームの前処理を済ませたか */
 	bool rendering_bg; /* 背景の描画中（背景に自分が含まれる場合の再帰よけ） */
 	bool has_bg;
 	bool input_ok;
@@ -229,7 +229,7 @@ static void add_light_group(obs_properties_t *props, int idx)
 	obs_properties_t *g = obs_properties_create();
 
 	obs_property_t *kind = obs_properties_add_list(g, light_key(idx, "kind", &k), obs_module_text("Light.Kind"),
-						      OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+						       OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	obs_property_list_add_int(kind, obs_module_text("Light.Kind.None"), 0);
 	obs_property_list_add_int(kind, obs_module_text("Light.Kind.Linear"), 1);
 	obs_property_list_add_int(kind, obs_module_text("Light.Kind.Radial"), 2);
@@ -285,7 +285,7 @@ static obs_properties_t *hz_properties(void *data)
 	obs_properties_add_float_slider(sh, S_SPREAD, obs_module_text("Harmonizer.Spread"), 0.0, 12.0, 0.1);
 	obs_properties_add_float_slider(sh, S_RIM, obs_module_text("Harmonizer.Rim"), 0.0, 2.0, 0.01);
 	obs_property_t *rw = obs_properties_add_float_slider(sh, S_RIM_WIDTH, obs_module_text("Harmonizer.RimWidth"),
-							      1.0, 24.0, 0.5);
+							     1.0, 24.0, 0.5);
 	obs_property_float_set_suffix(rw, " px");
 	obs_properties_add_float_slider(sh, S_RIM_DIR, obs_module_text("Harmonizer.RimDir"), 0.0, 1.0, 0.01);
 	obs_properties_add_group(props, "shade_group", obs_module_text("Harmonizer.ShadeGroup"), OBS_GROUP_NORMAL, sh);

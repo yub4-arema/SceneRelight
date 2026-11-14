@@ -15,8 +15,8 @@
 /* 前フレームの結果を読みながら新しい結果を書くための 2 枚組 */
 struct hz_pingpong {
 	gs_texrender_t *tr[2];
-	int cur;     /* 最後に書いた方 */
-	bool valid;  /* 一度でも書いたか */
+	int cur;    /* 最後に書いた方 */
+	bool valid; /* 一度でも書いたか */
 };
 
 void hz_pingpong_init(struct hz_pingpong *pp, enum gs_color_format fmt);
