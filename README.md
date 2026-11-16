@@ -67,7 +67,7 @@ python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png --co
 [Releases](https://github.com/yub4-arema/obs-harmonizer/releases) から OS に合ったファイルをダウンロードします。
 配置先は OBS 公式の[プラグインガイド](https://obsproject.com/kb/plugins-guide)に従っています。
 
-- **Windows**: zip を展開し、中の `obs-harmonizer` フォルダを `C:\ProgramData\obs-studio\plugins` に置きます（公式の推奨場所）。
+- **Windows**: zip を展開し、中の `obs-harmonizer` フォルダを `C:\ProgramData\obs-studio\plugins` に置きます（公式の推奨場所。下の注意を参照）。
 - **macOS**: `.pkg` を実行します（このインストーラーは `/Library/Application Support/obs-studio/plugins/obs-harmonizer.plugin` に入れます）。
 - **Linux**: `.deb` を `sudo apt install ./ファイル名.deb` で入れます（`/usr/lib/x86_64-linux-gnu/obs-plugins/` と `/usr/share/obs/obs-plugins/obs-harmonizer/` に入ります）。
 
@@ -82,6 +82,11 @@ OBS を再起動すると、フィルターの一覧に追加されます。
 | Windows（推奨） | `C:\ProgramData\obs-studio\plugins` |
 | macOS | `~/Library/Application Support/obs-studio/plugins`（プラグインごとの `.plugin` バンドル） |
 | Linux | `~/.config/obs-studio/plugins` |
+
+> **Windows の注意**
+> `C:\ProgramData\obs-studio\plugins` は、OBS 本体のインストール先（`C:\Program Files\obs-studio`。中に `bin`・`data`・`obs-plugins` がある）とは**別の場所**です。
+> `ProgramData` は初期状態では隠しフォルダで、`obs-studio\plugins` も最初は存在しません。エクスプローラーのアドレス欄に `C:\ProgramData` と入力して開き、`obs-studio` と `plugins` のフォルダが無ければ作ってください。
+> `C:\Program Files\obs-studio\obs-plugins\64bit` に置く旧来の方法は、公式ガイドで「将来の OBS で動かなくなる」とされているため、使わないでください。
 
 Windows の ProgramData と Linux のユーザーフォルダには、次のフォルダ構成が必要です（公式ガイドの説明）。
 
