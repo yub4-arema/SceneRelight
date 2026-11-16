@@ -1,4 +1,4 @@
-// obs-harmonizer 前処理パス
+// obs-scene-relight 前処理パス
 //   Blocks / BlocksSq : 256x144 の背景 -> 32x18 のブロック平均
 //   Stats             : 32x18 -> 6x1 の統計（時間平滑つき）
 //   BlurH / BlurV     : 32x18 の環境光マップをぼかす（BlurV で時間平滑）

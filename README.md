@@ -1,13 +1,15 @@
-# obs-harmonizer
+# Scene Relight (obs-scene-relight)
 
 配信で、前景（立ち絵・アバター）を背景の色味と光に自動でなじませる OBS フィルターです。
 背景ソースを指定するだけで、その場に立っているように見せることができ、背景が動いても毎フレーム追従します。
+
+1.0.0 までは「OBS Harmonizer (obs-harmonizer)」という名前でした。1.0.0 から入れ替える場合は、下の「1.0.0 からの入れ替え」を見てください。
 
 *English: OBS filters that automatically match a foreground (avatar / character art) to a background source — the scene's light color and brightness, shade, light from bright sources in the background (street lamps, windows, signs) and rim light — plus a finishing filter (halftone, grain, light leak). GPU only, no CPU readback. GPL-2.0-or-later.*
 
 ## できること
 
-### 1. 背景になじませる (Harmonizer)
+### 1. 背景になじませる (Scene Relight)
 
 | 項目 | 内容 |
 | --- | --- |
@@ -22,7 +24,7 @@
 
 前景と背景が同じシーンにあれば、シーン内の配置（位置・拡大率・回転）を自動で読みます。
 
-### 2. 仕上げ：網点・グレイン・光漏れ (Harmonizer)
+### 2. 仕上げ：網点・グレイン・光漏れ (Scene Relight)
 
 前景と背景にまとめて掛けることで、同じカメラで撮った雰囲気を表現します。
 
@@ -36,8 +38,8 @@
 ## 使い方
 
 1. 背景（画像・動画・シーンなど）と前景（立ち絵・アバター）を同じシーンに置く
-2. 前景のソースにフィルター「背景になじませる (Harmonizer)」を追加し、「背景ソース」で背景を選ぶ
-3. 必要ならシーン（またはグループ）にフィルター「仕上げ：網点・グレイン・光漏れ (Harmonizer)」を追加する
+2. 前景のソースにフィルター「背景になじませる (Scene Relight)」を追加し、「背景ソース」で背景を選ぶ
+3. 必要ならシーン（またはグループ）にフィルター「仕上げ：網点・グレイン・光漏れ (Scene Relight)」を追加する
 
 ## 仕組みと負荷
 
@@ -64,11 +66,21 @@ python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png --co
 [Releases](https://github.com/yub4-arema/obs-harmonizer/releases) から OS に合ったファイルをダウンロードします。
 配置先は OBS 公式の[プラグインガイド](https://obsproject.com/kb/plugins-guide)に準拠しています。
 
-- **Windows**: zip を展開し、中の `obs-harmonizer` フォルダを `C:\ProgramData\obs-studio\plugins` に置きます（公式の推奨場所。下の注意を参照）。
-- **macOS**: `.pkg` を実行します（このインストーラーは `/Library/Application Support/obs-studio/plugins/obs-harmonizer.plugin` に入れます）。
-- **Linux**: `.deb` を `sudo apt install ./ファイル名.deb` で入れます（`/usr/lib/x86_64-linux-gnu/obs-plugins/` と `/usr/share/obs/obs-plugins/obs-harmonizer/` に入ります）。
+- **Windows**: zip を展開し、中の `obs-scene-relight` フォルダを `C:\ProgramData\obs-studio\plugins` に置きます（公式の推奨場所。下の注意を参照）。
+- **macOS**: `.pkg` を実行します（このインストーラーは `/Library/Application Support/obs-studio/plugins/obs-scene-relight.plugin` に入れます）。
+- **Linux**: `.deb` を `sudo apt install ./ファイル名.deb` で入れます（`/usr/lib/x86_64-linux-gnu/obs-plugins/` と `/usr/share/obs/obs-plugins/obs-scene-relight/` に入ります）。
 
 OBS を再起動すると、フィルターの一覧に追加されます。
+
+### 1.0.0 からの入れ替え
+
+1.1.0 でプラグインの名前とファイル名が変わりました。**先に 1.0.0（obs-harmonizer）を消してから**入れてください。両方が入っていると、同じフィルターが 2 つ登録されようとして片方が読み込まれません。
+
+- **Windows**: `C:\ProgramData\obs-studio\plugins` の中の `obs-harmonizer` フォルダを消します。
+- **macOS**: `/Library/Application Support/obs-studio/plugins/obs-harmonizer.plugin` を消します。
+- **Linux**: `sudo apt remove obs-harmonizer` を実行します。
+
+フィルターの内部の名前は変えていないので、1.0.0 で作ったシーンのフィルターと設定はそのまま使えます。
 
 ## 変更履歴
 

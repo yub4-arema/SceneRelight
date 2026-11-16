@@ -62,7 +62,7 @@ def make_assets(d):
 
 def render(build, d, name, *opts, bg='bg.png'):
     out = os.path.join(d, name + '.rgba')
-    cmd = [os.path.join(build, 'hz-headless-render'), os.path.join(build, 'obs-harmonizer.so'),
+    cmd = [os.path.join(build, 'hz-headless-render'), os.path.join(build, 'obs-scene-relight.so'),
            os.path.join(ROOT, 'data'), os.path.join(d, bg), os.path.join(d, 'fg.png'), out,
            '--x', '0.5', '--h', '0.9', '--y', '0.95', *opts]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)

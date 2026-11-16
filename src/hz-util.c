@@ -1,6 +1,6 @@
 /*
- * obs-harmonizer
- * Copyright (C) 2026 obs-harmonizer contributors
+ * obs-scene-relight
+ * Copyright (C) 2026 obs-scene-relight contributors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "hz-util.h"

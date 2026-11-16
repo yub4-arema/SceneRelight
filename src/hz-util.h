@@ -1,6 +1,6 @@
 /*
- * obs-harmonizer
- * Copyright (C) 2026 obs-harmonizer contributors
+ * obs-scene-relight
+ * Copyright (C) 2026 obs-scene-relight contributors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #pragma once
@@ -10,7 +10,7 @@
 #include <graphics/vec4.h>
 #include <graphics/matrix4.h>
 
-#define HZ_LOG(level, fmt, ...) blog(level, "[obs-harmonizer] " fmt, ##__VA_ARGS__)
+#define HZ_LOG(level, fmt, ...) blog(level, "[obs-scene-relight] " fmt, ##__VA_ARGS__)
 
 /* 前フレームの結果を読みながら新しい結果を書くための 2 枚組 */
 struct hz_pingpong {

@@ -1,5 +1,5 @@
 import sys, os, json
-sys.path.insert(0, '/home/user/obs-harmonizer/tools')
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'tools'))
 import numpy as np
 from PIL import Image
 import reference as R

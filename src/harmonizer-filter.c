@@ -1,6 +1,6 @@
 /*
- * obs-harmonizer: 前景（立ち絵・アバター）を背景になじませるフィルター
- * Copyright (C) 2026 obs-harmonizer contributors
+ * obs-scene-relight: 前景（立ち絵・アバター）を背景になじませるフィルター
+ * Copyright (C) 2026 obs-scene-relight contributors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * 1 フレームの流れ（GPU のみ。CPU への読み戻しなし）

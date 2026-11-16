@@ -1,4 +1,4 @@
-// obs-harmonizer Finish: 網点・グレイン・光漏れ・周辺減光
+// obs-scene-relight Finish: 網点・グレイン・光漏れ・周辺減光
 // tools/reference.py の finish() と同じ式
 // SPDX-License-Identifier: GPL-2.0-or-later
 

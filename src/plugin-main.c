@@ -1,6 +1,6 @@
 /*
- * obs-harmonizer
- * Copyright (C) 2026 obs-harmonizer contributors
+ * obs-scene-relight
+ * Copyright (C) 2026 obs-scene-relight contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,11 +13,11 @@
 #include "plugin-support.h"
 
 OBS_DECLARE_MODULE()
-OBS_MODULE_USE_DEFAULT_LOCALE("obs-harmonizer", "en-US")
+OBS_MODULE_USE_DEFAULT_LOCALE("obs-scene-relight", "en-US")
 
 MODULE_EXPORT const char *obs_module_description(void)
 {
-	return "Harmonize foreground (avatar / tachie) colors and lighting with the background.";
+	return "Relight a foreground (avatar / character art) with the light of the background scene.";
 }
 
 extern struct obs_source_info harmonizer_filter;

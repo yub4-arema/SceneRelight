@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""obs-harmonizer の参照実装（numpy）。
+"""obs-scene-relight の参照実装（numpy）。
 
 シェーダー（data/*.effect）と同じ段取り・同じ式で計算する。
 見た目の調整と、シェーダーを変えたときの確認に使う。

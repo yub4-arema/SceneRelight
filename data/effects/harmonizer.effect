@@ -1,4 +1,4 @@
-// obs-harmonizer: 前景を背景になじませる本体
+// obs-scene-relight: 前景を背景になじませる本体
 // tools/reference.py の harmonize() と同じ式
 // SPDX-License-Identifier: GPL-2.0-or-later
 

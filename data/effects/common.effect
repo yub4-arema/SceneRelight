@@ -1,4 +1,4 @@
-// obs-harmonizer 共通定義
+// obs-scene-relight 共通定義
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 uniform float4x4 ViewProj;
