@@ -38,7 +38,7 @@
     },
     "name": "obs-harmonizer",
     "displayName": "OBS Harmonizer",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "author": "obs-harmonizer contributors",
     "website": "https://github.com/yub4-arema/obs-harmonizer",
     "email": ""
