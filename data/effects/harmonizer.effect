@@ -151,6 +151,9 @@ float4 PSHarmonize(VertData v) : TARGET
 	float gain = clamp(hl / 0.5, 0.3, 1.0);
 	float3 air = bg_black * 0.5;
 	air = air * min(1.0, 0.03 / max(hz_luma(air), 0.00001));
+	air = air * (1.0 - 0.9 * smoothstep(0.25, 0.55, hl)); // 明るい場面では黒は黒のまま
+	// 光源の光は暗い場面のもの。明るい場面（昼）では、空や日なたを光源と取り違えないよう消す
+	float night = 1.0 - smoothstep(0.45, 0.62, hl);
 
 	// 1) コントラスト：輝度だけを、前景の平均を軸に動かす。白は崩さない
 	float Y = max(hz_luma(lin), 0.00001);
@@ -186,7 +189,7 @@ float4 PSHarmonize(VertData v) : TARGET
 	float3 ec = s3 / max(ss, 0.00001);
 	float3 ed = abs(ec - one);
 	ec = one + (ec - one) * min(1.0, 0.8 / max(max(max(ed.r, ed.g), ed.b), 0.0001));
-	float lit = ss / (ss + 0.25);
+	float lit = ss / (ss + 0.25) * night;
 	float3 band = hz_edge(v.uv, src.a, float2(0.06 / aspect, 0.06));
 	float sx = hz_luma(hz_src(buv + float2(dd.x, 0.0)) - hz_src(buv - float2(dd.x, 0.0)));
 	float sy = hz_luma(hz_src(buv + float2(0.0, dd.y)) - hz_src(buv - float2(0.0, dd.y)));
@@ -201,7 +204,9 @@ float4 PSHarmonize(VertData v) : TARGET
 	float2 ldir = float2(lx, ly) / (length(float2(lx, ly)) + 0.00001);
 	float facing = clamp(dot(ed3.yz, ldir), -1.0, 1.0);
 	float dirw = clamp(1.0 + (saturate(facing * 0.5 + 0.5) * 2.0 - 1.0) * rim_dir, 0.0, 2.0);
-	float3 rim_col = illum * saturate(eL * 1.5) * smoothstep(0.9, 1.8, rel) + ec * lit * 1.5;
+	// 背景の回り込みは、暗い色（黒髪・黒い服）の上では白くぼやけて見えるので弱める
+	float wrap = 0.3 + 0.7 * sqrt(saturate(hz_luma(lin)));
+	float3 rim_col = illum * saturate(eL * 1.5) * smoothstep(1.2, 2.2, rel) * wrap + ec * lit * 1.5;
 	lin = hz_screen(lin, rim_col * ed3.x * rim * dirw);
 
 	// 7) 手置きの光と影

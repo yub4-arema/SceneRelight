@@ -304,7 +304,10 @@ def scene_light(bst):
     gain = float(np.clip(hl / LEVEL_REF, GAIN_MIN, 1.0))
     air = bst['black_rgb'] * 0.5
     air = air * min(1.0, AIR_MAX / max(float(air @ LUMA), 1e-5))
-    return illum, gain, air
+    air = air * (1 - 0.9 * float(smoothstep(0.25, 0.55, hl)))   # 明るい場面では黒は黒のまま
+    # 光源の光は暗い場面のもの。明るい場面（昼）では、空や日なたを光源と取り違えないよう消す
+    night = 1 - float(smoothstep(DARK_SCENE[0], DARK_SCENE[1], hl))
+    return illum, gain, air, night
 
 
 def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
@@ -318,7 +321,7 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     src = fg[..., :3]
     a = fg[..., 3]
     lin = srgb_to_lin(src)
-    illum, gain, air = scene_light(bst)
+    illum, gain, air, night = scene_light(bst)
 
     # 1) コントラスト：輝度だけを、前景の平均を軸に動かす。白は崩さない
     Y = np.maximum(luma(lin), 1e-5)
@@ -379,7 +382,7 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     ss = (s3 @ LUMA)[..., None]
     ec = s3 / np.maximum(ss, 1e-5)
     ec = 1 + (ec - 1) * np.minimum(1.0, 0.8 / np.maximum(np.abs(ec - 1).max(-1, keepdims=True), 1e-4))
-    lit = ss / (ss + SOURCE_HALF)
+    lit = ss / (ss + SOURCE_HALF) * night
     band, bnx, bny = edge_normal(SIDE_R * h / w, SIDE_R)
     sx, sy = env_grad(lambda c: c[..., 3:6] @ LUMA)
     side = np.clip(band, 0, 1) * np.clip(bnx * sx + bny * sy, 0, 1)
@@ -390,7 +393,9 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     lx, ly = env_grad(lambda c: c[..., :3] @ LUMA)
     facing = np.clip(nx * lx + ny * ly, -1, 1)
     dirw = np.clip(1 + (np.clip(facing * 0.5 + 0.5, 0, 1) * 2 - 1) * prm['rim_dir'], 0, 2)
-    rim_col = illum * np.clip(eL * 1.5, 0, 1) * smoothstep(0.9, 1.8, rel) + ec * lit * 1.5
+    #    背景の回り込みは、暗い色（黒髪・黒い服）の上では白くぼやけて見えるので弱める
+    wrap = 0.3 + 0.7 * np.sqrt(np.clip(luma(lin), 0, 1))[..., None]
+    rim_col = illum * np.clip(eL * 1.5, 0, 1) * smoothstep(1.2, 2.2, rel) * wrap + ec * lit * 1.5
     lin = 1 - (1 - lin) * (1 - np.clip(rim_col * (edge * prm['rim'] * dirw)[..., None], 0, 1))
 
     # 7) 手置きの光と影
