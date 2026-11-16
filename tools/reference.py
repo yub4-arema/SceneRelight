@@ -114,7 +114,7 @@ def blur_grid(g, radius):
     if radius <= 0:
         return g
     sigma = radius / 2.0
-    r = int(math.ceil(radius))
+    r = 12  # シェーダーと同じ ±12 タップ（光源マップは裾が効くので、途中で打ち切らない）
     k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2)
     k /= k.sum()
     out = g
@@ -136,7 +136,7 @@ def blur_grid(g, radius):
 DEFAULTS = dict(
     strength=1.0,         # 全体の効き
     tint=0.8,             # その場の光の色を前景に乗せる
-    exposure=0.8,         # その場の光の明るさに合わせる（暗い場面で暗くする）
+    exposure=0.65,        # その場の光の明るさに合わせる（暗い場面で暗くする）
     contrast=0.0,         # コントラストの追従度
     shadow_tint=0.6,      # 暗部にその場の空気の色を乗せる
     shading=1.0,          # 自動陰影（背後が暗ければ影、光源があれば照らす）
@@ -267,17 +267,22 @@ def harmonize_legacy(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
 #    暗い場面（夜）と、暖色のかぶり（夕日）は、明るい側の平均の色を使う。
 #  - 明るさ: 背景の明るい側が暗いほど（夜）、前景も暗くする。明るい場面では変えない。
 #  - 空気の色: 黒い服や髪などの暗い所に、背景の暗部の色を乗せる。
-#  - 自動陰影: 背後がまわりより暗ければ影に入り、はっきり明るければ光源として照らされる。
+#  - 自動陰影: 背後がまわりより暗ければ影に入る。
+#  - 光源: 背景の平均よりはっきり明るい所（街灯・窓・看板）を光源とみなし、その光をぼかして
+#    広げ、近い側から前景を照らす（全体をうっすら＋光源を向いた側の面と縁を強く）。
 #    その中間では何もしない（背景の色を前景に写り込ませない）。
 #  - 縁の光: 背後がまわりより明るい側の縁だけ、その場の光の色が回り込む（ライトラップ）。
 WHITE_P = 12.0          # 白の推定のべき（大きいほど最も明るい所だけを見る）
 LEVEL_REF = 0.5         # 背景の明るい側の輝度（線形）がこれ以上なら、明るさは変えない
 GAIN_MIN = 0.3          # 暗くする下限
-DARK_SCENE = (0.25, 0.6)  # 暗い場面（夜）では、光の色を白ではなく明るい側の平均から取る
+DARK_SCENE = (0.45, 0.62) # 暗い場面（夜）では、光の色を白ではなく明るい側の平均から取る
 CHROMA_KNEE = (0.1, 0.35)  # 光の色の立ち上がり（これ以下のずれは昼の空の青み程度とみなして使わない）
-CHROMA_LIMIT = 0.8      # 光の色の彩度の上限
+CHROMA_LIMIT = 0.55     # 光の色の彩度の上限
+AIR_MAX = 0.03          # 空気の色の輝度の上限（明るい背景で黒が白っぽく浮かないように）
 SHADE_MIN = 0.35        # 影：背後の明るさの比の下限
-SOURCE_REL = (1.3, 3.0) # 光源：背後がまわりよりこれだけ明るいと、光源として前景を照らす
+SOURCE_T = 2.0          # 光源：背景の平均のこの倍より明るい所を光源とみなす（昼の雲や空は入らない）
+SOURCE_HALF = 0.25      # 光源の光の届き方（小さいほど弱い光源でも強く照らされる）
+SIDE_R = 0.06           # 光源側の面を照らす帯の幅（前景の高さ比）
 
 
 def scene_light(bst):
@@ -292,16 +297,19 @@ def scene_light(bst):
     w = hi * (1 - t) + np.maximum(bst['white_rgb'], 1e-4) * t
     c = w / float(w @ LUMA)
     dev = float(np.abs(c - 1).max())
-    k = float(smoothstep(CHROMA_KNEE[0], CHROMA_KNEE[1], dev)) * min(1.0, CHROMA_LIMIT / max(dev, 1e-4))
+    # 不感帯は「白」を使うときだけ（昼の空の青み対策）。夜や夕方の色はそのまま使う
+    knee = float(smoothstep(CHROMA_KNEE[0], CHROMA_KNEE[1], dev))
+    k = (1 - t + t * knee) * min(1.0, CHROMA_LIMIT / max(dev, 1e-4))
     illum = 1 + (c - 1) * k
     gain = float(np.clip(hl / LEVEL_REF, GAIN_MIN, 1.0))
     air = bst['black_rgb'] * 0.5
+    air = air * min(1.0, AIR_MAX / max(float(air @ LUMA), 1e-5))
     return illum, gain, air
 
 
 def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     if prm.get('legacy'):
-        return harmonize_legacy(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h)
+        return harmonize_legacy(fg, fg_to_bg, env[..., :3], bst, fst, prm, fg_px_w, fg_px_h)
     h, w = fg.shape[:2]
     v, u = np.mgrid[0:h, 0:w].astype(np.float32)
     u = (u + 0.5) / w
@@ -334,46 +342,58 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     k = 1 - np.clip(luma(lin), 0, 1)[..., None]
     lin = lin + air * prm['shadow_tint'] * k * k
 
-    # 4) 自動陰影：背後がまわりより暗ければ影に入り、はっきり明るければ（光源）その色で照らされる。
-    #    中間（昼のふつうの明るさのむら）では何もしない＝背景の色を写り込ませない
-    e = sample_bilinear(env, bu, bv)
+    # 4) 自動陰影：背後がまわりより暗ければ影に入る（暗い場面では、すでに暗くしているので弱める）
+    e4 = sample_bilinear(env, bu, bv)
+    e = e4[..., :3]
     eL = np.maximum(e @ LUMA, 1e-4)[..., None]
     mL = max(float(bst['mean_rgb'] @ LUMA), 1e-4)
     rel = eL / mL
     sh = prm['shading']
-    lin = lin * np.power(np.clip(rel, SHADE_MIN, 1.0), sh * 0.6)
-    ec = e / eL
-    ec = 1 + (ec - 1) * np.minimum(1.0, 0.6 / np.maximum(np.abs(ec - 1).max(-1, keepdims=True), 1e-4))
-    lit = smoothstep(SOURCE_REL[0], SOURCE_REL[1], rel)
-    lin = lin * (1 + ec * lit * sh * 0.8)
+    lin = lin * np.power(np.clip(rel, SHADE_MIN, 1.0), sh * 0.6 * gain)
 
-    # 5) 縁の光（ライトラップ）：背後が平均より明るく、光が来る側の縁だけ
-    acc = np.zeros_like(a)
-    gx = np.zeros_like(a)
-    gy = np.zeros_like(a)
-    for i in range(12):
-        t = 2 * math.pi * i / 12
-        dx, dy = math.cos(t) * prm['rim_width'], math.sin(t) * prm['rim_width']
-        an = sample_bilinear(a[..., None], u + dx / w, v + dy / h)[..., 0]
-        acc += an
-        gx += an * math.cos(t)
-        gy += an * math.sin(t)
-    acc /= 12
-    edge = a * np.clip(1 - acc, 0, 1) * 2
-    nx, ny = -gx, -gy
-    nl = np.sqrt(nx * nx + ny * ny) + 1e-5
-    nx, ny = nx / nl, ny / nl
-    du = 1.5 / GRID_W
-    dv = 1.5 / GRID_H
-    lx = (sample_bilinear(env, bu + du, bv) - sample_bilinear(env, bu - du, bv)) @ LUMA
-    ly = (sample_bilinear(env, bu, bv + dv) - sample_bilinear(env, bu, bv - dv)) @ LUMA
-    ll = np.sqrt(lx * lx + ly * ly) + 1e-5
-    facing = np.clip(nx * lx / ll + ny * ly / ll, -1, 1)
+    # 縁と向き：細い縁（rim_width px）と、太い帯（前景の高さの SIDE_R）の 2 つを alpha の勾配から出す
+    def edge_normal(rx, ry):
+        acc = np.zeros_like(a)
+        gx = np.zeros_like(a)
+        gy = np.zeros_like(a)
+        for i in range(12):
+            t = 2 * math.pi * i / 12
+            an = sample_bilinear(a[..., None], u + math.cos(t) * rx, v + math.sin(t) * ry)[..., 0]
+            acc += an
+            gx += an * math.cos(t)
+            gy += an * math.sin(t)
+        nl = np.sqrt(gx * gx + gy * gy) + 1e-5
+        return a * np.clip(1 - acc / 12, 0, 1) * 2, -gx / nl, -gy / nl
+
+    def env_grad(ch):
+        du = 1.5 / GRID_W
+        dv = 1.5 / GRID_H
+        gx = ch(sample_bilinear(env, bu + du, bv)) - ch(sample_bilinear(env, bu - du, bv))
+        gy = ch(sample_bilinear(env, bu, bv + dv)) - ch(sample_bilinear(env, bu, bv - dv))
+        gl = np.sqrt(gx * gx + gy * gy) + 1e-5
+        return gx / gl, gy / gl
+
+    # 5) 光源：背景のはっきり明るい所（街灯・窓・看板）の光が、近い側から前景を照らす
+    #    光の色は光源そのものの色（暖色の灯籠なら暖色、看板ならその色）
+    s3 = e4[..., 3:6] / mL
+    ss = (s3 @ LUMA)[..., None]
+    ec = s3 / np.maximum(ss, 1e-5)
+    ec = 1 + (ec - 1) * np.minimum(1.0, 0.8 / np.maximum(np.abs(ec - 1).max(-1, keepdims=True), 1e-4))
+    lit = ss / (ss + SOURCE_HALF)
+    band, bnx, bny = edge_normal(SIDE_R * h / w, SIDE_R)
+    sx, sy = env_grad(lambda c: c[..., 3:6] @ LUMA)
+    side = np.clip(band, 0, 1) * np.clip(bnx * sx + bny * sy, 0, 1)
+    lin = lin * (1 + ec * lit * sh * (0.6 + 1.2 * side[..., None]))
+
+    # 6) 縁の光（ライトラップ）：背後が平均より明るく、光が来る側の縁だけ。光源の近くでは光源の色で強く
+    edge, nx, ny = edge_normal(prm['rim_width'] / w, prm['rim_width'] / h)
+    lx, ly = env_grad(lambda c: c[..., :3] @ LUMA)
+    facing = np.clip(nx * lx + ny * ly, -1, 1)
     dirw = np.clip(1 + (np.clip(facing * 0.5 + 0.5, 0, 1) * 2 - 1) * prm['rim_dir'], 0, 2)
-    rim_col = illum * np.clip(eL * 1.5, 0, 1) * smoothstep(0.9, 1.8, rel)
+    rim_col = illum * np.clip(eL * 1.5, 0, 1) * smoothstep(0.9, 1.8, rel) + ec * lit * 1.5
     lin = 1 - (1 - lin) * (1 - np.clip(rim_col * (edge * prm['rim'] * dirw)[..., None], 0, 1))
 
-    # 6) 手置きの光と影
+    # 7) 手置きの光と影
     aspect = fg_px_w / fg_px_h
     for key in ('light1', 'light2'):
         pp = prm[key]
@@ -499,7 +519,12 @@ def run(bg_img, fg_img, x=0.62, y=1.0, hfrac=0.95, prm=None, fin=None, finish_on
     blocks = bg_blocks(bg_lin)
     bst = bg_stats(blocks)
     fst = fg_stats(fg)
-    env = blur_grid(blocks[..., :3], prm['shading_spread'])
+    # 環境光マップ（前 3 ch）と光源マップ（後 3 ch）。光源マップは、平均の SOURCE_T 倍を超えた分の
+    # 輝度を、その場所の色のまま残したもの。どちらも同じ幅でぼかす
+    bl = np.maximum(blocks[..., :3] @ LUMA, 1e-4)
+    excess = np.maximum(bl - SOURCE_T * float(bst['mean_rgb'] @ LUMA), 0)
+    env = blur_grid(np.concatenate([blocks[..., :3], blocks[..., :3] * (excess / bl)[..., None]], -1),
+                    prm['shading_spread'])
 
     def fg_to_bg(u, v):
         return (L + u * W) / CW, (T + v * H) / CH

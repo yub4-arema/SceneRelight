@@ -5,7 +5,8 @@
  *
  * 1 フレームの流れ（GPU のみ。CPU への読み戻しなし）
  *   背景ソース -> 256x144 -> 32x18 ブロック平均 -> 統計 6x1（時間平滑）
- *                                       └-> ぼかし -> 環境光マップ 32x18（時間平滑）
+ *                                       ├-> ぼかし -> 環境光マップ 32x18（時間平滑）
+ *                                       └-> 明るい所だけ残してぼかし -> 光源マップ 32x18（時間平滑）
  *   前景（このフィルターの入力）-> 32x32 -> 統計 1x1（時間平滑）
  *   本体: harmonizer.effect
  */
@@ -62,7 +63,7 @@ struct harmonizer {
 	gs_eparam_t *p_image, *p_image2, *p_prev, *p_texel, *p_blend, *p_sigma;
 
 	/* main のパラメーター */
-	gs_eparam_t *m_image, *m_env, *m_stats, *m_fgstats, *m_texel, *m_map_u, *m_map_v, *m_has_bg;
+	gs_eparam_t *m_image, *m_env, *m_src, *m_stats, *m_fgstats, *m_texel, *m_map_u, *m_map_v, *m_has_bg;
 	gs_eparam_t *m_strength, *m_tint, *m_exposure, *m_contrast, *m_shadow_tint, *m_shading;
 	gs_eparam_t *m_rim, *m_rim_width, *m_rim_dir, *m_aspect;
 	struct light_eparams m_l[2];
@@ -72,9 +73,11 @@ struct harmonizer {
 	gs_texrender_t *blocks;
 	gs_texrender_t *blocks_sq;
 	gs_texrender_t *blur_h;
+	gs_texrender_t *src_h;
 	gs_texrender_t *fg_small;
 	struct hz_pingpong stats;
 	struct hz_pingpong env;
+	struct hz_pingpong src;
 	struct hz_pingpong fgstats;
 
 	obs_weak_source_t *bg;
@@ -174,7 +177,7 @@ static void hz_defaults(obs_data_t *s)
 	obs_data_set_default_bool(s, S_AUTO_PLACE, true);
 	obs_data_set_default_double(s, S_STRENGTH, 1.0);
 	obs_data_set_default_double(s, S_TINT, 0.8);
-	obs_data_set_default_double(s, S_EXPOSURE, 0.8);
+	obs_data_set_default_double(s, S_EXPOSURE, 0.65);
 	obs_data_set_default_double(s, S_CONTRAST, 0.0);
 	obs_data_set_default_double(s, S_SHADOW_TINT, 0.6);
 	obs_data_set_default_double(s, S_SMOOTH, 0.5);
@@ -343,9 +346,11 @@ static void hz_destroy(void *data)
 	gs_texrender_destroy(f->blocks);
 	gs_texrender_destroy(f->blocks_sq);
 	gs_texrender_destroy(f->blur_h);
+	gs_texrender_destroy(f->src_h);
 	gs_texrender_destroy(f->fg_small);
 	hz_pingpong_free(&f->stats);
 	hz_pingpong_free(&f->env);
+	hz_pingpong_free(&f->src);
 	hz_pingpong_free(&f->fgstats);
 	obs_leave_graphics();
 	obs_weak_source_release(f->bg);
@@ -365,9 +370,11 @@ static void *hz_create(obs_data_t *settings, obs_source_t *context)
 	f->blocks = gs_texrender_create(GS_RGBA16F, GS_ZS_NONE);
 	f->blocks_sq = gs_texrender_create(GS_RGBA16F, GS_ZS_NONE);
 	f->blur_h = gs_texrender_create(GS_RGBA16F, GS_ZS_NONE);
+	f->src_h = gs_texrender_create(GS_RGBA16F, GS_ZS_NONE);
 	f->fg_small = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 	hz_pingpong_init(&f->stats, GS_RGBA32F);
 	hz_pingpong_init(&f->env, GS_RGBA16F);
+	hz_pingpong_init(&f->src, GS_RGBA16F);
 	hz_pingpong_init(&f->fgstats, GS_RGBA32F);
 	obs_leave_graphics();
 
@@ -387,6 +394,7 @@ static void *hz_create(obs_data_t *settings, obs_source_t *context)
 	gs_effect_t *m = f->main;
 	f->m_image = gs_effect_get_param_by_name(m, "image");
 	f->m_env = gs_effect_get_param_by_name(m, "env");
+	f->m_src = gs_effect_get_param_by_name(m, "srcmap");
 	f->m_stats = gs_effect_get_param_by_name(m, "stats");
 	f->m_fgstats = gs_effect_get_param_by_name(m, "fgstats");
 	f->m_texel = gs_effect_get_param_by_name(m, "texel");
@@ -484,6 +492,21 @@ static bool process_background(struct harmonizer *f, float blend)
 	gs_effect_set_float(f->p_sigma, f->spread * 0.5f);
 	gs_effect_set_float(f->p_blend, prev ? blend : 1.0f);
 	hz_draw_pass(dst, GRID_W, GRID_H, p, "BlurV");
+
+	/* 光源マップ（横は SrcH で明るい所だけ残してぼかし、縦は BlurV） */
+	gs_effect_set_texture(f->p_image, gs_texrender_get_texture(f->blocks));
+	gs_effect_set_texture(f->p_image2, hz_pingpong_tex(&f->stats));
+	set_texel(f->p_texel, GRID_W, GRID_H);
+	gs_effect_set_float(f->p_sigma, f->spread * 0.5f);
+	hz_draw_pass(f->src_h, GRID_W, GRID_H, p, "SrcH");
+
+	dst = hz_pingpong_next(&f->src, &prev);
+	gs_effect_set_texture(f->p_image, gs_texrender_get_texture(f->src_h));
+	gs_effect_set_texture(f->p_prev, prev);
+	set_texel(f->p_texel, GRID_W, GRID_H);
+	gs_effect_set_float(f->p_sigma, f->spread * 0.5f);
+	gs_effect_set_float(f->p_blend, prev ? blend : 1.0f);
+	hz_draw_pass(dst, GRID_W, GRID_H, p, "BlurV");
 	return true;
 }
 
@@ -556,6 +579,7 @@ static void hz_render(void *data, gs_effect_t *effect)
 
 	gs_effect_set_texture(f->m_image, gs_texrender_get_texture(f->input));
 	gs_effect_set_texture(f->m_env, hz_pingpong_tex(&f->env));
+	gs_effect_set_texture(f->m_src, hz_pingpong_tex(&f->src));
 	gs_effect_set_texture(f->m_stats, hz_pingpong_tex(&f->stats));
 	gs_effect_set_texture(f->m_fgstats, hz_pingpong_tex(&f->fgstats));
 	set_texel(f->m_texel, (float)w, (float)h);
