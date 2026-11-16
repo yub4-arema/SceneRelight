@@ -1,0 +1,158 @@
+// obs-harmonizer Finish: 網点・グレイン・光漏れ・周辺減光
+// tools/reference.py の finish() と同じ式
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include "common.effect"
+
+uniform texture2d image;     // 入力（premultiplied, sRGB）
+uniform texture2d prev;      // 前フレームの光漏れ統計
+uniform texture2d leakstats; // 光漏れ統計 2x1: 0=(x, y, 0, 1) 1=(色 rgb, 1)
+uniform float2 texel;
+uniform float2 size;         // 入力のピクセルサイズ
+uniform float blend;
+
+uniform float halftone;
+uniform float halftone_cell;
+uniform float halftone_angle; // ラジアン
+uniform float halftone_edge;
+uniform float grain;
+uniform float grain_size;
+uniform float seed;
+uniform float leak;
+uniform float leak_size;
+uniform float leak_auto;
+uniform float2 leak_pos;
+uniform float3 leak_color;
+uniform float leak_auto_color;
+uniform float vignette;
+
+// ---------------------------------------------------------------- 縮小 32x18
+
+float4 PSDown(VertData v) : TARGET
+{
+	// 1 出力セルを 8x8 点で平均
+	float2 cell = float2(1.0 / 32.0, 1.0 / 18.0);
+	float3 acc = float3(0.0, 0.0, 0.0);
+	for (int j = 0; j < 8; j++) {
+		for (int i = 0; i < 8; i++) {
+			float2 uv = v.uv + (float2(float(i), float(j)) + 0.5 - 4.0) / 8.0 * cell;
+			acc += hz_unpremul(image.SampleLevel(linearClamp, uv, 0.0)).rgb;
+		}
+	}
+	return float4(acc / 64.0, 1.0);
+}
+
+// ---------------------------------------------------------------- 光漏れの位置と色 2x1
+
+float4 PSLeakStats(VertData v) : TARGET
+{
+	float2 c = float2(0.0, 0.0);
+	float3 col = float3(0.0, 0.0, 0.0);
+	float ws = 0.0;
+	for (int y = 0; y < 18; y++) {
+		for (int x = 0; x < 32; x++) {
+			float2 uv = (float2(float(x), float(y)) + 0.5) / float2(32.0, 18.0);
+			float3 p = image.SampleLevel(pointClamp, uv, 0.0).rgb;
+			float l = hz_luma(p);
+			float l2 = l * l;
+			float l4 = l2 * l2;
+			float w = l4 * l4 + 0.000001;
+			c += uv * w;
+			col += p * w;
+			ws += w;
+		}
+	}
+	col /= ws;
+	col /= max(max(col.r, col.g), max(col.b, 0.0001));
+	float4 cur = (v.uv.x < 0.5) ? float4(c / ws, 0.0, 1.0) : float4(col, 1.0);
+	return lerp(prev.SampleLevel(pointClamp, v.uv, 0.0), cur, blend);
+}
+
+// ---------------------------------------------------------------- 本体
+
+float hz_hash(float2 p)
+{
+	return frac(sin(p.x * 12.9898 + p.y * 78.233 + seed * 37.719) * 43758.5453);
+}
+
+float4 PSFinish(VertData v) : TARGET
+{
+	float4 src = hz_unpremul(image.SampleLevel(pointClamp, v.uv, 0.0));
+	float3 c = src.rgb;
+	float2 px = v.uv * size;
+	float ar = size.x / size.y;
+
+	// 周辺ほど 1 になる重み
+	float2 dc = float2((v.uv.x - 0.5) * ar, v.uv.y - 0.5);
+	float r = length(dc) / sqrt(0.25 * ar * ar + 0.25);
+	float edge_w = smoothstep(0.2, 1.0, r);
+
+	// 網点
+	if (halftone > 0.0001) {
+		float cell = max(halftone_cell, 2.0);
+		float ca = cos(halftone_angle);
+		float sa = sin(halftone_angle);
+		float2 p = float2(px.x * ca + px.y * sa, -px.x * sa + px.y * ca);
+		float2 cc = (floor(p / cell) + 0.5) * cell;
+		float2 sp = float2(cc.x * ca - cc.y * sa, cc.x * sa + cc.y * ca);
+		float cl = hz_luma(hz_unpremul(image.SampleLevel(linearClamp, sp / size, 0.0)).rgb);
+		float rad = sqrt(saturate(1.0 - cl)) * cell * 0.62;
+		float d = length(p - cc);
+		float dotv = 1.0 - smoothstep(rad - 0.75, rad + 0.75, d);
+		float w = halftone * (1.0 - halftone_edge + halftone_edge * edge_w) * smoothstep(0.95, 0.35, cl);
+		c = c * (1.0 - dotv * w * 0.45);
+	}
+
+	// 周辺減光
+	c = c * (1.0 - vignette * smoothstep(0.45, 1.1, r));
+
+	// 光漏れ
+	if (leak > 0.0001) {
+		float4 ls0 = leakstats.SampleLevel(pointClamp, float2(0.25, 0.5), 0.0);
+		float4 ls1 = leakstats.SampleLevel(pointClamp, float2(0.75, 0.5), 0.0);
+		float2 lp = leak_pos + (ls0.xy - leak_pos) * leak_auto;
+		float2 o = lp - float2(0.5, 0.5);
+		lp = lp + o / (length(o) + 0.0001) * 0.25; // 画面の外から差し込む
+		float lr = length(float2((v.uv.x - lp.x) * ar, v.uv.y - lp.y));
+		float ls = max(leak_size, 0.001);
+		float lm = exp(-(lr / ls) * (lr / ls) * 2.0);
+		float3 lc = (leak_auto_color > 0.5) ? ls1.rgb : leak_color;
+		c = hz_screen(c, lc * lm * leak);
+	}
+
+	// グレイン
+	if (grain > 0.0001) {
+		float n = hz_hash(floor(px / max(grain_size, 1.0))) - 0.5;
+		c = c + n * grain;
+	}
+
+	c = saturate(c);
+	return float4(c * src.a, src.a);
+}
+
+technique Down
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDown(v);
+	}
+}
+
+technique LeakStats
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSLeakStats(v);
+	}
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSFinish(v);
+	}
+}

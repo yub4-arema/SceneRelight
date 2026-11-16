@@ -1,0 +1,10 @@
+/build/
+/build_*/
+# テスト用の素材は再配布できないものがあるので入れない
+test-assets/
+*.pyc
+__pycache__/
+*.lock.json
+.DS_Store
+/cmake/.CMakeBuildNumber
+/release/

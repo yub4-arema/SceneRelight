@@ -1,0 +1,177 @@
+// obs-harmonizer: 前景を背景になじませる本体
+// tools/reference.py の harmonize() と同じ式
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include "common.effect"
+
+uniform texture2d image;     // 前景（premultiplied, sRGB）
+uniform texture2d env;       // 環境光マップ 32x18（線形 rgb）
+uniform texture2d stats;     // 背景の統計 4x1
+uniform texture2d fgstats;   // 前景の統計 1x1
+
+uniform float2 texel;        // 前景の 1 テクセル
+uniform float4 map_u;        // 前景 uv -> 背景 uv: bu = dot(map_u.xy, uv) + map_u.z
+uniform float4 map_v;        //                    bv = dot(map_v.xy, uv) + map_v.z
+uniform float has_bg;        // 背景が取れていれば 1
+
+uniform float strength;
+uniform float tint;
+uniform float exposure;
+uniform float contrast;
+uniform float shadow_tint;
+uniform float shading;
+uniform float rim;
+uniform float rim_width;
+uniform float rim_dir;
+uniform float aspect;        // 前景の 幅/高さ
+
+// 手置きライト: kind 0=なし 1=直線 2=円
+uniform float  l1_kind;
+uniform float2 l1_pos;
+uniform float  l1_angle;
+uniform float  l1_size;
+uniform float  l1_soft;
+uniform float  l1_amount;
+uniform float3 l1_color;
+uniform float  l1_auto;
+uniform float  l2_kind;
+uniform float2 l2_pos;
+uniform float  l2_angle;
+uniform float  l2_size;
+uniform float  l2_soft;
+uniform float  l2_amount;
+uniform float3 l2_color;
+uniform float  l2_auto;
+
+float4 hz_stat(float i)
+{
+	return stats.SampleLevel(pointClamp, float2((i + 0.5) / 4.0, 0.5), 0.0);
+}
+
+float2 hz_bguv(float2 uv)
+{
+	return float2(dot(map_u.xy, uv) + map_u.z, dot(map_v.xy, uv) + map_v.z);
+}
+
+float3 hz_env(float2 buv)
+{
+	return env.SampleLevel(linearClamp, buv, 0.0).rgb;
+}
+
+float hz_light_mask(float kind, float2 pos, float angle, float size, float soft, float2 uv)
+{
+	float2 d = float2((uv.x - pos.x) * aspect, uv.y - pos.y);
+	if (kind < 1.5) {
+		float t = d.x * cos(angle) + d.y * sin(angle);
+		float s = max(soft * 0.5, 0.001);
+		return 1.0 - smoothstep(-s, s, t);
+	}
+	float r = length(d);
+	float rad = max(size * 0.5, 0.001);
+	float sf = max(soft, 0.001);
+	return 1.0 - smoothstep(rad * (1.0 - sf), rad, r);
+}
+
+float3 hz_apply_light(float3 lin, float kind, float2 pos, float angle, float size, float soft,
+		      float amount, float3 color, float autoc, float2 uv, float3 auto_shadow,
+		      float3 auto_light)
+{
+	if (kind < 0.5 || abs(amount) < 0.0001)
+		return lin;
+	float m = hz_light_mask(kind, pos, angle, size, soft, uv);
+	if (amount < 0.0) {
+		float3 col = (autoc > 0.5) ? auto_shadow : color;
+		return lin * (float3(1.0, 1.0, 1.0) + (col - float3(1.0, 1.0, 1.0)) * m * -amount);
+	}
+	// 光は元の色に比例して明るくする（黒い服は黒いまま明るくなる）。少しだけ霞を足す
+	float3 colL = (autoc > 0.5) ? auto_light : color;
+	return lin * (float3(1.0, 1.0, 1.0) + colL * m * amount * 2.0) + colL * m * amount * 0.04;
+}
+
+float4 PSHarmonize(VertData v) : TARGET
+{
+	float4 src = hz_unpremul(image.SampleLevel(pointClamp, v.uv, 0.0));
+	if (src.a <= 0.0)
+		return float4(0.0, 0.0, 0.0, 0.0);
+	if (has_bg < 0.5)
+		return float4(src.rgb * src.a, src.a);
+
+	float4 s0 = hz_stat(0.0);
+	float4 s1 = hz_stat(1.0);
+	float4 s2 = hz_stat(2.0);
+	float3 bg_mean = s0.rgb;
+	float bg_mlp = s0.a;
+	float3 bg_hi = s1.rgb;
+	float bg_sd = s1.a;
+	float3 bg_lo = s2.rgb;
+	float4 fs = fgstats.SampleLevel(pointClamp, float2(0.5, 0.5), 0.0);
+	float fg_m = max(fs.r, 0.001);
+	float fg_sd = max(fs.g, 0.001);
+
+	float2 buv = hz_bguv(v.uv);
+	float3 lin = hz_srgb_to_lin(src.rgb);
+
+	// 1) 明るさとコントラスト（黒は黒のまま）
+	float s = 1.0 + (clamp(bg_sd / fg_sd, 0.75, 1.35) - 1.0) * contrast;
+	float target_m = fg_m + (bg_mlp - fg_m) * exposure;
+	float3 g = hz_lin_to_srgb(lin);
+	g = target_m * pow(max(g, float3(0.0, 0.0, 0.0)) / fg_m, float3(s, s, s));
+	lin = hz_srgb_to_lin(clamp(g, 0.0, 1.5));
+
+	// 2) 光の色と暗部の色
+	float3 illum = hz_chroma(bg_hi * 0.6 + bg_mean * 0.4, 0.45);
+	lin = lin * (float3(1.0, 1.0, 1.0) + (illum - float3(1.0, 1.0, 1.0)) * tint);
+	float L = saturate(hz_luma(lin));
+	float3 shadow_col = hz_chroma(bg_lo, 0.45) * L;
+	float k = 1.0 - L;
+	lin = lin + (shadow_col - lin) * shadow_tint * k * k * k;
+
+	// 3) 自動陰影
+	float3 e = hz_env(buv);
+	float eL = max(hz_luma(e), 0.0001);
+	float mL = max(hz_luma(bg_mean), 0.0001);
+	float rel = clamp(eL / mL, 0.25, 2.5);
+	float3 shade = pow(rel, shading * 0.8) * (float3(1.0, 1.0, 1.0) + (e / eL - float3(1.0, 1.0, 1.0)) * 0.5 * shading);
+	lin = lin * shade;
+
+	// 4) 縁の光
+	float acc = 0.0;
+	float2 grad = float2(0.0, 0.0);
+	for (int i = 0; i < 12; i++) {
+		float t = 6.2831853 * float(i) / 12.0;
+		float2 dir = float2(cos(t), sin(t));
+		float an = image.SampleLevel(linearClamp, v.uv + dir * rim_width * texel, 0.0).a;
+		acc += an;
+		grad += an * dir;
+	}
+	acc /= 12.0;
+	float edge = src.a * saturate(1.0 - acc) * 2.0;
+	float2 n = -grad / (length(grad) + 0.00001);
+	float2 dd = float2(1.5 / 32.0, 1.5 / 18.0);
+	float lx = hz_luma(hz_env(buv + float2(dd.x, 0.0)) - hz_env(buv - float2(dd.x, 0.0)));
+	float ly = hz_luma(hz_env(buv + float2(0.0, dd.y)) - hz_env(buv - float2(0.0, dd.y)));
+	float2 ldir = float2(lx, ly) / (length(float2(lx, ly)) + 0.00001);
+	float facing = clamp(dot(n, ldir), -1.0, 1.0);
+	float dirw = clamp(1.0 + (saturate(facing * 0.5 + 0.5) * 2.0 - 1.0) * rim_dir, 0.0, 2.0);
+	float3 rim_col = e / eL * saturate(eL * 1.5) * smoothstep(0.7, 1.6, rel) * 1.5;
+	lin = hz_screen(lin, rim_col * edge * rim * dirw);
+
+	// 5) 手置きの光と影
+	float3 auto_shadow = saturate(hz_chroma(bg_lo, 0.45) * 0.35);
+	float3 auto_light = saturate(bg_hi / max(max(bg_hi.r, bg_hi.g), max(bg_hi.b, 0.0001)));
+	lin = hz_apply_light(lin, l1_kind, l1_pos, l1_angle, l1_size, l1_soft, l1_amount, l1_color, l1_auto, v.uv, auto_shadow, auto_light);
+	lin = hz_apply_light(lin, l2_kind, l2_pos, l2_angle, l2_size, l2_soft, l2_amount, l2_color, l2_auto, v.uv, auto_shadow, auto_light);
+
+	float3 outc = hz_lin_to_srgb(lin);
+	outc = saturate(src.rgb + (outc - src.rgb) * strength);
+	return float4(outc * src.a, src.a);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSHarmonize(v);
+	}
+}
