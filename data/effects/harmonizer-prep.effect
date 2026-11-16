@@ -2,7 +2,7 @@
 //   Blocks / BlocksSq : 256x144 の背景 -> 32x18 のブロック平均
 //   Stats             : 32x18 -> 6x1 の統計（時間平滑つき）
 //   BlurH / BlurV     : 32x18 の環境光マップをぼかす（BlurV で時間平滑）
-//   SrcH              : 光源マップの横ぼかし。平均の 2 倍を超えた分の輝度を、その場所の色のまま残す
+//   SrcH              : 光源マップの横ぼかし。平均の 2 倍（平均は下限 0.03）を超えた分の輝度を、その場所の色のまま残す
 //                       （image2 = 統計。縦は BlurV を使う）
 //   FgStats           : 32x32 の前景 -> 1x1 の統計（時間平滑つき）
 // SPDX-License-Identifier: GPL-2.0-or-later
@@ -154,7 +154,7 @@ float4 PSSrcH(VertData v) : TARGET
 		float w = hz_gauss(float(i));
 		float3 c = image.SampleLevel(pointClamp, v.uv + float2(float(i) * texel.x, 0.0), 0.0).rgb;
 		float l = max(hz_luma(c), 0.0001);
-		acc += c * (max(l - 2.0 * mL, 0.0) / l) * w;
+		acc += c * (max(l - 2.0 * max(mL, 0.03), 0.0) / l) * w;
 		ws += w;
 	}
 	return float4(acc / ws, 1.0);
