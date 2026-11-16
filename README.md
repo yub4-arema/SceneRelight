@@ -65,12 +65,51 @@ python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png --co
 ## インストール
 
 [Releases](https://github.com/yub4-arema/obs-harmonizer/releases) から OS に合ったファイルをダウンロードします。
+配置先は、OBS 公式の[プラグインガイド](https://obsproject.com/kb/plugins-guide)に従っています。
 
-- **Windows**: zip を展開し、中の `obs-harmonizer` フォルダを `C:\ProgramData\obs-studio\plugins` に置きます（`C:\ProgramData\obs-studio\plugins\obs-harmonizer\bin\64bit\obs-harmonizer.dll` になります）
-- **macOS**: `.pkg` を実行します
-- **Linux**: `.deb` を `sudo apt install ./ファイル名.deb` で入れます
+- **Windows**: zip を展開し、中の `obs-harmonizer` フォルダを `C:\ProgramData\obs-studio\plugins` に置きます。
+- **macOS**: `.pkg` を実行します。`/Library/Application Support/obs-studio/plugins/obs-harmonizer.plugin` に入ります。
+- **Linux**: `.deb` を `sudo apt install ./ファイル名.deb` で入れます。
 
 OBS を再起動すると、フィルターの一覧に追加されます。
+
+### 手動で置く場合の配置
+
+プラグインごとに `bin`（本体）と `data`（シェーダーと翻訳）を持つ、OBS 公式のプラグインフォルダ構成です。
+
+```
+Windows  C:\ProgramData\obs-studio\plugins\obs-harmonizer\
+           ├─ bin\64bit\obs-harmonizer.dll
+           └─ data\effects\*.effect , data\locale\*.ini
+
+Linux（ユーザー単位） ~/.config/obs-studio/plugins/obs-harmonizer/
+           ├─ bin/64bit/obs-harmonizer.so
+           └─ data/effects/*.effect , data/locale/*.ini
+
+Linux（.deb・システム全体）
+           /usr/lib/x86_64-linux-gnu/obs-plugins/obs-harmonizer.so
+           /usr/share/obs/obs-plugins/obs-harmonizer/effects , locale
+
+macOS    /Library/Application Support/obs-studio/plugins/obs-harmonizer.plugin
+```
+
+`data` の中身が置かれていないと、フィルターを追加したときにシェーダーを読めずエラーになります。
+
+## リポジトリの構成
+
+```
+src/        プラグイン本体（C）
+              plugin-main.c      プラグインの登録
+              harmonizer-filter.c / finish-filter.c   2 つのフィルター
+              hz-util.[ch]       共通処理
+data/       OBS がプラグインの data として読むファイル
+              effects/           シェーダー（*.effect）
+              locale/            表示文字列（ja-JP.ini, en-US.ini）
+tools/      参照実装（reference.py）とヘッドレス描画ツール
+tests/      ヘッドレスのテスト
+cmake/ build-aux/ .github/ CMakePresets.json buildspec.json
+            obs-plugintemplate 由来のビルド設定とワークフロー
+```
 
 ## ビルド
 
