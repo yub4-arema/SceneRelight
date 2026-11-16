@@ -1,5 +1,5 @@
 /*
- * obs-harmonizer の動作確認用：OBS をヘッドレスで動かして 1 フレームを書き出す
+ * obs-scene-relight の動作確認用：OBS をヘッドレスで動かして 1 フレームを書き出す
  *
  *   headless-render <plugin.so> <data dir> <bg image> <fg image> <out.rgba> [options]
  *     --x 0.66 --y 1.0 --h 1.0   前景の下端中央の位置と高さ（キャンバス比）

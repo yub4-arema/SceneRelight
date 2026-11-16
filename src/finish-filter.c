@@ -1,7 +1,7 @@
 /*
- * obs-harmonizer Finish: 網点・グレイン・光漏れ・周辺減光
+ * obs-scene-relight Finish: 網点・グレイン・光漏れ・周辺減光
  * シーンやグループに掛けて、前景と背景を同じ「カメラ」で撮ったように見せる
- * Copyright (C) 2026 obs-harmonizer contributors
+ * Copyright (C) 2026 obs-scene-relight contributors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "hz-util.h"

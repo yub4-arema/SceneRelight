@@ -33,13 +33,13 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "io.github.yub4-arema.obs-harmonizer"
+            "bundleId": "io.github.yub4-arema.obs-scene-relight"
         }
     },
-    "name": "obs-harmonizer",
-    "displayName": "OBS Harmonizer",
+    "name": "obs-scene-relight",
+    "displayName": "Scene Relight",
     "version": "1.1.0",
-    "author": "obs-harmonizer contributors",
+    "author": "obs-scene-relight contributors",
     "website": "https://github.com/yub4-arema/obs-harmonizer",
     "email": ""
 }

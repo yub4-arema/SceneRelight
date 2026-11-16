@@ -8,12 +8,14 @@
 
 ## 1. プロジェクトの概要
 
+**1.1.0 でプラグインの名前を「OBS Harmonizer (obs-harmonizer)」から「Scene Relight (obs-scene-relight)」に変えた。** 変えたのは表示名・ビルドの成果物の名前・インストール先。リポジトリ名（`yub4-arema/obs-harmonizer`）、フィルターの内部 ID（`obs_harmonizer_filter`、`obs_harmonizer_finish_filter`）、ソースやシェーダーのファイル名、表示文字列のキー（`Harmonizer.*`）は変えていない（内部 ID を変えると、保存済みのシーンからフィルターが消える）。以下の文中の「Harmonizer」は、前景に掛けるフィルターのこと。
+
 OBS Studio 用のフィルター・プラグイン（C + HLSL 風 `.effect`、GPU のみ、CPU 読み戻しなし）。
 
 - **Harmonizer（背景になじませる）**: 前景（立ち絵）に掛ける。背景ソースを指定すると、背景の光の色・明るさ・コントラスト・陰影・縁の光を前景に反映する。
 - **Finish（仕上げ）**: シーンやグループに掛ける。網点・グレイン・光漏れ・ビネット。
 - 参照実装（numpy）: `tools/reference.py`。シェーダーと同じ式で、見た目の検討に使う。
-- ビルドは obs-plugintemplate 準拠。README に手順あり。
+- ビルドは obs-plugintemplate 準拠。Linux でのビルドとテストの手順は 6 節。
 
 主なファイル:
 
