@@ -48,6 +48,13 @@ def make_assets(d):
     lamp = np.exp(-(((xx - W * 0.72) / (W * 0.05)) ** 2 + ((yy - H * 0.4) / (H * 0.12)) ** 2))
     night = np.array([0.05, 0.09, 0.2]) * (1 - lamp[..., None]) + np.array([1.0, 0.85, 0.55]) * lamp[..., None]
     Image.fromarray((np.clip(night, 0, 1) * 255).astype(np.uint8)).save(os.path.join(d, 'bg_night.png'))
+    # 真っ暗な夜：ほぼ黒の中に、小さな暖色の灯りが右側に点在する（灯籠の並ぶ参道など）
+    lamps = np.zeros((H, W), np.float32)
+    for cx, cy in ((0.63, 0.4), (0.75, 0.3), (0.88, 0.5)):
+        lamps += np.exp(-(((xx - W * cx) / (W * 0.015)) ** 2 + ((yy - H * cy) / (H * 0.04)) ** 2))
+    lamps = np.clip(lamps, 0, 1)
+    dark = np.array([0.03, 0.03, 0.07]) * (1 - lamps[..., None]) + np.array([1.0, 0.75, 0.4]) * lamps[..., None]
+    Image.fromarray((np.clip(dark, 0, 1) * 255).astype(np.uint8)).save(os.path.join(d, 'bg_dark.png'))
     # 前景：白〜灰色の縦長の楕円（縁は少しぼかす）
     fw, fh = 400, 1000
     yy, xx = np.mgrid[0:fh, 0:fw].astype(np.float32)
@@ -124,6 +131,17 @@ def main():
               f'night: lit from the lamp side (left {lum(night[y0:y1, x0:mid]):.3f}, right {lum(night[y0:y1, mid:x1]):.3f})')
         diff = np.abs(night - ref)[y0:y1, x0:x1].mean()
         check(diff < 0.03, f'night: matches reference implementation (mean abs diff {diff:.4f})')
+
+        # 真っ暗な夜に小さな灯り：全体はしっかり暗く、灯りの側だけが照らされる
+        dk = fix(render(build, d, 'dark', bg='bg_dark.png'))
+        nv, ref = reference.run(Image.open(os.path.join(d, 'bg_dark.png')), fg_img, 0.5, 0.95, 0.9, finish_on=False)
+        q = (x1 - x0) // 4
+        far = lum(dk[y0:y1, x0:x0 + q]) / lum(nv[y0:y1, x0:x0 + q])
+        near = lum(dk[y0:y1, x1 - q:x1]) / lum(nv[y0:y1, x1 - q:x1])
+        check(far < 0.6, f'dark: the side away from the lamps is dark (x{far:.2f})')
+        check(near > far * 1.1, f'dark: lit from the lamp side (away x{far:.2f}, near x{near:.2f})')
+        diff = np.abs(dk - ref)[y0:y1, x0:x1].mean()
+        check(diff < 0.03, f'dark: matches reference implementation (mean abs diff {diff:.4f})')
 
     if FAILED:
         print(f'\n{len(FAILED)} check(s) failed')

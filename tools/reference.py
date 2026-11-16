@@ -274,7 +274,7 @@ def harmonize_legacy(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
 #  - 縁の光: 背後がまわりより明るい側の縁だけ、その場の光の色が回り込む（ライトラップ）。
 WHITE_P = 12.0          # 白の推定のべき（大きいほど最も明るい所だけを見る）
 LEVEL_REF = 0.5         # 背景の明るい側の輝度（線形）がこれ以上なら、明るさは変えない
-GAIN_MIN = 0.3          # 暗くする下限
+GAIN_MIN = 0.1          # 暗くする下限
 DARK_SCENE = (0.45, 0.62) # 暗い場面（夜）では、光の色を白ではなく明るい側の平均から取る
 CHROMA_KNEE = (0.1, 0.35)  # 光の色の立ち上がり（これ以下のずれは昼の空の青み程度とみなして使わない）
 CHROMA_LIMIT = 0.55     # 光の色の彩度の上限
@@ -284,6 +284,14 @@ SHADE_MIN = 0.35        # 影：背後の明るさの比の下限
 SOURCE_T = 2.0          # 光源：背景の平均のこの倍より明るい所を光源とみなす（昼の雲や空は入らない）
 SOURCE_HALF = 0.25      # 光源の光の届き方（小さいほど弱い光源でも強く照らされる）
 SIDE_R = 0.06           # 光源側の面を照らす帯の幅（前景の高さ比）
+MEAN_REF = 0.22         # 背景全体の平均（知覚輝度）がこれ未満の真っ暗な場面は、さらに暗くする
+SOURCE_FLOOR = 0.04     # 光源の強さを測る基準（背景の平均の輝度）の下限。真っ暗な場面で光源が膨らまないように
+SOURCE_T_FLOOR = 0.03   # 光源とみなすしきい値の基準（背景の平均の輝度）の下限
+SOURCE_GAIN_MIN = 0.4    # 光源の光の基準の明るさの下限（小さな灯りしかない場面でも、灯りの側ははっきり照らす）
+AMB_LIMIT = 0.3         # 真っ暗な場面の環境の色の彩度の上限
+SOURCE_AMB = 0.2        # 光源の光：全体をうっすら照らす分
+SOURCE_SIDE = 2.0       # 光源の光：光源を向いた側を照らす分
+RAMP = 1.0              # 光源の光：前景全体の光源側への傾きの強さ
 
 
 def scene_light(bst):
@@ -307,14 +315,24 @@ def scene_light(bst):
     knee = float(smoothstep(CHROMA_KNEE[0], CHROMA_KNEE[1], dev))
     k = (1 - t + t * knee) * min(1.0, CHROMA_LIMIT / max(dev, 1e-4))
     illum = 1 + (c - 1) * k
+    # 灯りが点在するだけの真っ暗な場面では、全体の光は環境（夜空など）の色にする。
+    # 灯りの色は、5) の光源の光として、光源側からだけ乗せる
+    dk = 1 - float(np.clip(bst['mean_lp'] / MEAN_REF, 0.0, 1.0))
+    amb = chroma_v(np.maximum(bst['mean_rgb'], 1e-4), AMB_LIMIT)
+    wa = float(smoothstep(0.0, 0.4, dk))
+    illum = illum * (1 - wa) + amb * wa
     illum[0] = max(illum[0], RED_MIN)
-    gain = float(np.clip(hl / LEVEL_REF, GAIN_MIN, 1.0))
+    # 明るさ: 明るい側の輝度（夜か）と、背景全体の平均（灯りが点在するだけの真っ暗な場面か）の両方で決める
+    dark = float(np.clip(bst['mean_lp'] / MEAN_REF, 0.0, 1.0)) ** 2.2
+    gain = float(np.clip(min(hl / LEVEL_REF, 1.0) * dark, GAIN_MIN, 1.0))
+    # 光源の光の基準の明るさ（真っ暗な場面でさらに暗くした分は含めない。灯りの光は場面の暗さと無関係に当たる）
+    gsrc = float(np.clip(hl / LEVEL_REF, SOURCE_GAIN_MIN, 1.0))
     air = bst['black_rgb'] * 0.5
     air = air * min(1.0, AIR_MAX / max(float(air @ LUMA), 1e-5))
     air = air * (1 - 0.9 * float(smoothstep(0.25, 0.55, hl)))   # 明るい場面では黒は黒のまま
     # 光源の光は暗い場面のもの。明るい場面（昼）では、空や日なたを光源と取り違えないよう消す
     night = 1 - float(smoothstep(DARK_SCENE[0], DARK_SCENE[1], hl))
-    return illum, gain, air, night
+    return illum, gain, air, night, gsrc
 
 
 def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
@@ -328,7 +346,7 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     src = fg[..., :3]
     a = fg[..., 3]
     lin = srgb_to_lin(src)
-    illum, gain, air, night = scene_light(bst)
+    illum, gain, air, night, gsrc = scene_light(bst)
 
     # 1) コントラスト：輝度だけを、前景の平均を軸に動かす。白は崩さない
     Y = np.maximum(luma(lin), 1e-5)
@@ -346,6 +364,7 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     L = np.minimum(luma(lin), 1.0)[..., None]
     mx = lin.max(-1, keepdims=True)
     lin = L + (lin - L) * np.minimum(1.0, (1 - L) / np.maximum(mx - L, 1e-5))
+    base = lin * (gsrc ** prm['exposure'])   # 光源の光を受ける元の色
     lin = lin * (gain ** prm['exposure'])
 
     # 3) 空気の色：暗い所ほど、背景の暗部の色が乗る
@@ -385,7 +404,7 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
 
     # 5) 光源：背景のはっきり明るい所（街灯・窓・看板）の光が、近い側から前景を照らす
     #    光の色は光源そのものの色（暖色の灯籠なら暖色、看板ならその色）
-    s3 = e4[..., 3:6] / mL
+    s3 = e4[..., 3:6] / max(mL, SOURCE_FLOOR)
     ss = (s3 @ LUMA)[..., None]
     ec = s3 / np.maximum(ss, 1e-5)
     ec = 1 + (ec - 1) * np.minimum(1.0, 0.5 / np.maximum(np.abs(ec - 1).max(-1, keepdims=True), 1e-4))
@@ -393,7 +412,11 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     band, bnx, bny = edge_normal(SIDE_R * h / w, SIDE_R)
     sx, sy = env_grad(lambda c: c[..., 3:6] @ LUMA)
     side = np.clip(band, 0, 1) * np.clip(bnx * sx + bny * sy, 0, 1)
-    lin = lin * (1 + ec * lit * sh * (0.6 + 1.2 * side[..., None]))
+    #    前景全体にも、光源側ほど明るい傾きを付ける（光源と反対側は暗いまま）
+    ramp = np.clip(0.5 + ((u - 0.5) * w / h * sx + (v - 0.5) * sy) * 1.5, 0, 1)
+    side = np.maximum(side, ramp * RAMP)
+    #    光源の光は足し算で乗せる（場面が暗くても、光源側は光源の明るさで照らされる）
+    lin = lin + base * ec * lit * sh * (SOURCE_AMB + SOURCE_SIDE * side[..., None])
 
     # 6) 縁の光（ライトラップ）：背後が平均より明るく、光が来る側の縁だけ。光源の近くでは光源の色で強く
     edge, nx, ny = edge_normal(prm['rim_width'] / w, prm['rim_width'] / h)
@@ -534,7 +557,7 @@ def run(bg_img, fg_img, x=0.62, y=1.0, hfrac=0.95, prm=None, fin=None, finish_on
     # 環境光マップ（前 3 ch）と光源マップ（後 3 ch）。光源マップは、平均の SOURCE_T 倍を超えた分の
     # 輝度を、その場所の色のまま残したもの。どちらも同じ幅でぼかす
     bl = np.maximum(blocks[..., :3] @ LUMA, 1e-4)
-    excess = np.maximum(bl - SOURCE_T * float(bst['mean_rgb'] @ LUMA), 0)
+    excess = np.maximum(bl - SOURCE_T * max(float(bst['mean_rgb'] @ LUMA), SOURCE_T_FLOOR), 0)
     env = blur_grid(np.concatenate([blocks[..., :3], blocks[..., :3] * (excess / bl)[..., None]], -1),
                     prm['shading_spread'])
 

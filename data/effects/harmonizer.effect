@@ -152,8 +152,17 @@ float4 PSHarmonize(VertData v) : TARGET
 	// 不感帯は「白」を使うときだけ（昼の空の青み対策）。夜や夕方の色はそのまま使う
 	float knee = lerp(1.0, smoothstep(0.1, 0.35, dev), wt);
 	float3 illum = one + (wcol - one) * knee * min(1.0, 0.55 / max(dev, 0.0001));
+	// 灯りが点在するだけの真っ暗な場面では、全体の光は環境（夜空など）の色にする。
+	// 灯りの色は、5) の光源の光として、光源側からだけ乗せる
+	float mlp = s0.a;
+	float dk = 1.0 - saturate(mlp / 0.22);
+	illum = lerp(illum, hz_chroma(max(bg_mean, float3(0.0001, 0.0001, 0.0001)), 0.3), smoothstep(0.0, 0.4, dk));
 	illum.r = max(illum.r, 0.8); // 青緑の光で肌が土気色にならないよう、赤を減らす下限
-	float gain = clamp(hl / 0.5, 0.3, 1.0);
+	// 明るさ：明るい側の輝度（夜か）と、背景全体の平均（灯りが点在するだけの真っ暗な場面か）の両方で決める
+	float dark = pow(saturate(mlp / 0.22), 2.2);
+	float gain = clamp(min(hl / 0.5, 1.0) * dark, 0.1, 1.0);
+	// 光源の光の基準の明るさ（真っ暗な場面でさらに暗くした分は含めない。灯りの光は場面の暗さと無関係に当たる）
+	float gsrc = clamp(hl / 0.5, 0.4, 1.0);
 	float3 air = bg_black * 0.5;
 	air = air * min(1.0, 0.03 / max(hz_luma(air), 0.00001));
 	air = air * (1.0 - 0.9 * smoothstep(0.25, 0.55, hl)); // 明るい場面では黒は黒のまま
@@ -173,6 +182,7 @@ float4 PSHarmonize(VertData v) : TARGET
 	float L = min(hz_luma(lin), 1.0);
 	float mx = max(max(lin.r, lin.g), lin.b);
 	lin = float3(L, L, L) + (lin - float3(L, L, L)) * min(1.0, (1.0 - L) / max(mx - L, 0.00001));
+	float3 base = lin * pow(gsrc, exposure); // 光源の光を受ける元の色
 	lin = lin * pow(gain, exposure);
 
 	// 3) 空気の色：暗い所ほど、背景の暗部の色が乗る
@@ -189,7 +199,7 @@ float4 PSHarmonize(VertData v) : TARGET
 	// 5) 光源：背景のはっきり明るい所（街灯・窓・看板）の光が、その色で、近い側から前景を照らす。
 	//    全体をうっすら照らし、光源を向いた側の面（太い帯）を強く照らす
 	float2 dd = float2(1.5 / 32.0, 1.5 / 18.0);
-	float3 s3 = hz_src(buv) / mL;
+	float3 s3 = hz_src(buv) / max(mL, 0.04);
 	float ss = hz_luma(s3);
 	float3 ec = s3 / max(ss, 0.00001);
 	float3 ed = abs(ec - one);
@@ -200,7 +210,11 @@ float4 PSHarmonize(VertData v) : TARGET
 	float sy = hz_luma(hz_src(buv + float2(0.0, dd.y)) - hz_src(buv - float2(0.0, dd.y)));
 	float2 sdir = float2(sx, sy) / (length(float2(sx, sy)) + 0.00001);
 	float side = saturate(band.x) * saturate(dot(band.yz, sdir));
-	lin = lin * (one + ec * lit * shading * (0.6 + 1.2 * side));
+	//    前景全体にも、光源側ほど明るい傾きを付ける（光源と反対側は暗いまま）
+	float ramp = saturate(0.5 + dot(float2((v.uv.x - 0.5) * aspect, v.uv.y - 0.5), sdir) * 1.5);
+	side = max(side, ramp * 1.0);
+	//    光源の光は足し算で乗せる（場面が暗くても、光源側は光源の明るさで照らされる）
+	lin = lin + base * ec * lit * shading * (0.2 + 2.0 * side);
 
 	// 6) 縁の光（ライトラップ）：背後が平均より明るく、光が来る側の縁だけ。光源の近くでは光源の色で強く
 	float3 ed3 = hz_edge(v.uv, src.a, rim_width * texel);
