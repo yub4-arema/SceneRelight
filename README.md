@@ -65,35 +65,39 @@ python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png --co
 ## インストール
 
 [Releases](https://github.com/yub4-arema/obs-harmonizer/releases) から OS に合ったファイルをダウンロードします。
-配置先は、OBS 公式の[プラグインガイド](https://obsproject.com/kb/plugins-guide)に従っています。
+配置先は OBS 公式の[プラグインガイド](https://obsproject.com/kb/plugins-guide)に従っています。
 
-- **Windows**: zip を展開し、中の `obs-harmonizer` フォルダを `C:\ProgramData\obs-studio\plugins` に置きます。
-- **macOS**: `.pkg` を実行します。`/Library/Application Support/obs-studio/plugins/obs-harmonizer.plugin` に入ります。
-- **Linux**: `.deb` を `sudo apt install ./ファイル名.deb` で入れます。
+- **Windows**: zip を展開し、中の `obs-harmonizer` フォルダを `C:\ProgramData\obs-studio\plugins` に置きます（公式の推奨場所）。
+- **macOS**: `.pkg` を実行します（このインストーラーは `/Library/Application Support/obs-studio/plugins/obs-harmonizer.plugin` に入れます）。
+- **Linux**: `.deb` を `sudo apt install ./ファイル名.deb` で入れます（`/usr/lib/x86_64-linux-gnu/obs-plugins/` と `/usr/share/obs/obs-plugins/obs-harmonizer/` に入ります）。
 
 OBS を再起動すると、フィルターの一覧に追加されます。
 
-### 手動で置く場合の配置
+### 手動で置く場合
 
-プラグインごとに `bin`（本体）と `data`（シェーダーと翻訳）を持つ、OBS 公式のプラグインフォルダ構成です。
+公式ガイドの配置先は次のとおりです。
+
+| OS | 配置先 |
+| --- | --- |
+| Windows（推奨） | `C:\ProgramData\obs-studio\plugins` |
+| macOS | `~/Library/Application Support/obs-studio/plugins`（プラグインごとの `.plugin` バンドル） |
+| Linux | `~/.config/obs-studio/plugins` |
+
+Windows の ProgramData と Linux のユーザーフォルダには、次のフォルダ構成が必要です（公式ガイドの説明）。
+
+- プラグイン名のフォルダの中に `bin` と `data` を置く
+- `bin` の中に `64bit` を作り、プラグインの本体（`.dll` / `.so`）を入れる。ファイル名はプラグインのフォルダ名と一致させる
+- `data` の中に `locale` を作り、翻訳の `.ini` を入れる
 
 ```
-Windows  C:\ProgramData\obs-studio\plugins\obs-harmonizer\
-           ├─ bin\64bit\obs-harmonizer.dll
-           └─ data\effects\*.effect , data\locale\*.ini
-
-Linux（ユーザー単位） ~/.config/obs-studio/plugins/obs-harmonizer/
-           ├─ bin/64bit/obs-harmonizer.so
-           └─ data/effects/*.effect , data/locale/*.ini
-
-Linux（.deb・システム全体）
-           /usr/lib/x86_64-linux-gnu/obs-plugins/obs-harmonizer.so
-           /usr/share/obs/obs-plugins/obs-harmonizer/effects , locale
-
-macOS    /Library/Application Support/obs-studio/plugins/obs-harmonizer.plugin
+obs-harmonizer/
+├─ bin/64bit/obs-harmonizer.dll   （Linux は .so）
+└─ data/
+   ├─ effects/*.effect            シェーダー
+   └─ locale/*.ini                翻訳
 ```
 
-`data` の中身が置かれていないと、フィルターを追加したときにシェーダーを読めずエラーになります。
+`data` の中身が無いと、シェーダーを読めずフィルターが動きません。
 
 ## リポジトリの構成
 
