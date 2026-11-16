@@ -66,7 +66,7 @@ python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png --co
 
 [Releases](https://github.com/yub4-arema/obs-harmonizer/releases) から OS に合ったファイルをダウンロードします。
 
-- **Windows**: zip を展開し、中の `obs-plugins` と `data` を OBS のインストール先（通常は `C:\Program Files\obs-studio`）の同じディレクトリに追加します
+- **Windows**: zip を展開し、中の `obs-harmonizer` フォルダを `C:\ProgramData\obs-studio\plugins` に置きます（`C:\ProgramData\obs-studio\plugins\obs-harmonizer\bin\64bit\obs-harmonizer.dll` になります）
 - **macOS**: `.pkg` を実行します
 - **Linux**: `.deb` を `sudo apt install ./ファイル名.deb` で入れます
 
