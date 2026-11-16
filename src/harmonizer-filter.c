@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * 1 フレームの流れ（GPU のみ。CPU への読み戻しなし）
- *   背景ソース -> 256x144 -> 32x18 ブロック平均 -> 統計 4x1（時間平滑）
+ *   背景ソース -> 256x144 -> 32x18 ブロック平均 -> 統計 6x1（時間平滑）
  *                                       └-> ぼかし -> 環境光マップ 32x18（時間平滑）
  *   前景（このフィルターの入力）-> 32x32 -> 統計 1x1（時間平滑）
  *   本体: harmonizer.effect
@@ -173,14 +173,14 @@ static void hz_defaults(obs_data_t *s)
 	obs_data_set_default_string(s, S_BG, "");
 	obs_data_set_default_bool(s, S_AUTO_PLACE, true);
 	obs_data_set_default_double(s, S_STRENGTH, 1.0);
-	obs_data_set_default_double(s, S_TINT, 0.7);
-	obs_data_set_default_double(s, S_EXPOSURE, 0.35);
-	obs_data_set_default_double(s, S_CONTRAST, 0.4);
-	obs_data_set_default_double(s, S_SHADOW_TINT, 0.35);
+	obs_data_set_default_double(s, S_TINT, 0.8);
+	obs_data_set_default_double(s, S_EXPOSURE, 0.8);
+	obs_data_set_default_double(s, S_CONTRAST, 0.0);
+	obs_data_set_default_double(s, S_SHADOW_TINT, 0.6);
 	obs_data_set_default_double(s, S_SMOOTH, 0.5);
 	obs_data_set_default_double(s, S_SHADING, 1.0);
 	obs_data_set_default_double(s, S_SPREAD, 4.0);
-	obs_data_set_default_double(s, S_RIM, 0.6);
+	obs_data_set_default_double(s, S_RIM, 0.4);
 	obs_data_set_default_double(s, S_RIM_WIDTH, 4.0);
 	obs_data_set_default_double(s, S_RIM_DIR, 0.85);
 	defaults_light(s, 0);
@@ -469,7 +469,7 @@ static bool process_background(struct harmonizer *f, float blend)
 	gs_effect_set_texture(f->p_image2, gs_texrender_get_texture(f->blocks_sq));
 	gs_effect_set_texture(f->p_prev, prev);
 	gs_effect_set_float(f->p_blend, prev ? blend : 1.0f);
-	hz_draw_pass(dst, 4, 1, p, "Stats");
+	hz_draw_pass(dst, 6, 1, p, "Stats");
 
 	/* 環境光マップ */
 	gs_effect_set_texture(f->p_image, gs_texrender_get_texture(f->blocks));

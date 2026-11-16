@@ -58,7 +58,7 @@ def sample_bilinear(img, u, v):
 
 # ---------------------------------------------------------------- 前処理パス
 # OBS 側:  背景ソースを 256x144 に描く → 32x18 のブロック平均（rgb + 知覚輝度の2乗平均）
-#          → 統計 2x1（平均・ハイライト色） → 32x18 の環境光マップをぼかす
+#          → 統計 6x1（平均・ハイライト・暗部・重心・白・黒） → 32x18 の環境光マップをぼかす
 #          それぞれ時間方向に指数平滑（ピンポン）
 
 SMALL_W, SMALL_H = 256, 144
@@ -89,7 +89,12 @@ def bg_stats(blocks):
     hi_rgb = (rgb * w[:, None]).sum(0) / w.sum()
     lo_w = np.power(1 - lp1, 4) + 1e-6
     lo_rgb = (rgb * lo_w[:, None]).sum(0) / lo_w.sum()
-    return dict(mean_rgb=mean_rgb, mean_lp=mean_lp, std_lp=std_lp, hi_rgb=hi_rgb, lo_rgb=lo_rgb)
+    # その場の白：チャンネルごとの WHITE_P 乗平均。その場の黒：暗い所に鋭く重みを付けた平均
+    white_rgb = np.power(np.power(rgb, WHITE_P).mean(0), 1 / WHITE_P)
+    bw = np.power(1 - lp1, 8) + 1e-6
+    black_rgb = (rgb * bw[:, None]).sum(0) / bw.sum()
+    return dict(mean_rgb=mean_rgb, mean_lp=mean_lp, std_lp=std_lp, hi_rgb=hi_rgb, lo_rgb=lo_rgb,
+                white_rgb=white_rgb, black_rgb=black_rgb)
 
 
 def fg_stats(fg):
@@ -130,13 +135,13 @@ def blur_grid(g, radius):
 
 DEFAULTS = dict(
     strength=1.0,         # 全体の効き
-    tint=0.7,             # 背景の光の色を前景に乗せる
-    exposure=0.35,        # 明るさの追従度
-    contrast=0.4,         # コントラストの追従度
-    shadow_tint=0.35,     # 暗部を背景の暗い色に寄せる
-    shading=1.0,          # 自動陰影（背景の明暗の分布を前景に掛ける）
+    tint=0.8,             # その場の光の色を前景に乗せる
+    exposure=0.8,         # その場の光の明るさに合わせる（暗い場面で暗くする）
+    contrast=0.0,         # コントラストの追従度
+    shadow_tint=0.6,      # 暗部にその場の空気の色を乗せる
+    shading=1.0,          # 自動陰影（背後が暗ければ影、光源があれば照らす）
     shading_spread=4.0,   # 自動陰影のぼかし（セル）
-    rim=0.6,              # 縁の光
+    rim=0.4,              # 縁の光（背後が明るい側だけ）
     rim_width=4.0,        # 縁の光の幅（前景ピクセル）
     rim_dir=0.85,          # 縁の光の方向性（0=全周, 1=光源側だけ）
     # 手置きの光と影（2枠）。kind: 0=なし 1=直線 2=円
@@ -254,22 +259,44 @@ def harmonize_legacy(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     return np.concatenate([np.clip(out, 0, 1), a[..., None]], -1)
 
 
-# ---------------------------------------------------------------- 新方式（v2）
-# 旧方式の問題（実際の評価で分かったこと）:
-#  - 明るさ: 前景の平均に対する倍率をそのまま掛けていた。黒い服が平均を下げるので、
-#    明るい昼の背景で髪が白飛びした。 → 輝度だけを、黒と白を固定したべき乗カーブで動かす
-#  - 自動陰影: 背後の背景の「色」までそのまま乗せていた。川や木の色が前景に写り込み、
-#    手前にいるはずの前景が背景の一部のように見えた。 → 局所は明暗だけ、色は広い範囲の平均だけ
-#  - 光の色・縁の光: 彩度の上限が高く、青空や川に引っ張られた。 → 上限を下げる
-CHROMA_LIMIT = 0.28   # 光の色・暗部の色の彩度の上限
-LOCAL_REL = (0.6, 1.6)  # 背後の明るさの比の範囲（旧: 0.25〜2.5）
-EXPO_P = (0.8, 1.25)   # 明るさ追従のべき指数の範囲（1 で変化なし）
+# ---------------------------------------------------------------- 現行方式（v3）
+# 考え方: 「その場の光で照らされた前景」を作る。昼は何もしないのに近く、夜・夕方・光源の近く・
+# 影の中のように、光の状況がはっきりしている所でははっきり効かせる。
+#  - 光の色: 明るい場面では、背景の「白」（チャンネルごとの 12 乗平均。昼なら雲の白）を光の色と
+#    みなす。平均色を使うと、昼の青空や川の色を光の色と取り違えて肌が青白くなる。
+#    暗い場面（夜）と、暖色のかぶり（夕日）は、明るい側の平均の色を使う。
+#  - 明るさ: 背景の明るい側が暗いほど（夜）、前景も暗くする。明るい場面では変えない。
+#  - 空気の色: 黒い服や髪などの暗い所に、背景の暗部の色を乗せる。
+#  - 自動陰影: 背後がまわりより暗ければ影に入り、はっきり明るければ光源として照らされる。
+#    その中間では何もしない（背景の色を前景に写り込ませない）。
+#  - 縁の光: 背後がまわりより明るい側の縁だけ、その場の光の色が回り込む（ライトラップ）。
+WHITE_P = 12.0          # 白の推定のべき（大きいほど最も明るい所だけを見る）
+LEVEL_REF = 0.5         # 背景の明るい側の輝度（線形）がこれ以上なら、明るさは変えない
+GAIN_MIN = 0.3          # 暗くする下限
+DARK_SCENE = (0.25, 0.6)  # 暗い場面（夜）では、光の色を白ではなく明るい側の平均から取る
+CHROMA_KNEE = (0.1, 0.35)  # 光の色の立ち上がり（これ以下のずれは昼の空の青み程度とみなして使わない）
+CHROMA_LIMIT = 0.8      # 光の色の彩度の上限
+SHADE_MIN = 0.35        # 影：背後の明るさの比の下限
+SOURCE_REL = (1.3, 3.0) # 光源：背後がまわりよりこれだけ明るいと、光源として前景を照らす
 
 
-def chroma_v(c, limit):
-    c = c / max(float(c @ LUMA), 1e-4)
+def scene_light(bst):
+    """背景の統計 → (光の色 rgb 輝度1, 明るさの倍率 0..1, 空気の色 rgb)。"""
+    hi = np.maximum(bst['hi_rgb'], 1e-4)
+    hl = float(hi @ LUMA)
+    # 明るい場面は「白」を光の色とみなす。暗い場面（夜）は白い物が無いので、明るい側の平均を使う
+    t = float(smoothstep(DARK_SCENE[0], DARK_SCENE[1], hl))
+    # ただし暖色（赤 > 緑 > 青）のかぶりは夕日などの光の色なので、明るくても平均側を使う
+    ch = hi / hl
+    t *= 1 - float(smoothstep(0.0, 0.15, min(ch[0] - ch[1], ch[1] - ch[2])))
+    w = hi * (1 - t) + np.maximum(bst['white_rgb'], 1e-4) * t
+    c = w / float(w @ LUMA)
     dev = float(np.abs(c - 1).max())
-    return 1 + (c - 1) * min(1.0, limit / max(dev, 1e-4))
+    k = float(smoothstep(CHROMA_KNEE[0], CHROMA_KNEE[1], dev)) * min(1.0, CHROMA_LIMIT / max(dev, 1e-4))
+    illum = 1 + (c - 1) * k
+    gain = float(np.clip(hl / LEVEL_REF, GAIN_MIN, 1.0))
+    air = bst['black_rgb'] * 0.5
+    return illum, gain, air
 
 
 def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
@@ -283,47 +310,44 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     src = fg[..., :3]
     a = fg[..., 3]
     lin = srgb_to_lin(src)
+    illum, gain, air = scene_light(bst)
 
-    # 1) 明るさとコントラスト：輝度だけを動かす（色相は保つ）。0 は 0、1 は 1 のまま
+    # 1) コントラスト：輝度だけを、前景の平均を軸に動かす。白は崩さない
     Y = np.maximum(luma(lin), 1e-5)
     lp = np.power(Y, 1 / 2.2)
-    fm = float(np.clip(fst['mean_lp'], 0.03, 0.97))
-    target = fm + (bst['mean_lp'] - fm) * prm['exposure']
-    p = math.log(float(np.clip(target, 0.03, 0.97))) / math.log(fm)
-    p = float(np.clip(p, *EXPO_P))
-    lp = np.power(lp, p)
     sc = 1 + (np.clip(bst['std_lp'] / max(fst['std_lp'], 1e-3), 0.75, 1.35) - 1) * prm['contrast']
-    pivot = fm ** p
-    lp2 = pivot * np.power(np.maximum(lp, 1e-4) / pivot, sc)
-    keep = smoothstep(0.7, 1.0, lp)                       # 白は崩さない
+    pivot = float(np.clip(fst['mean_lp'], 0.03, 0.97))
+    lp2 = pivot * np.power(lp / pivot, sc)
+    keep = smoothstep(0.7, 1.0, lp)
     lp = lp2 * (1 - keep) + lp * keep
-    gain = np.clip(np.power(np.clip(lp, 0, 1), 2.2) / Y, 0, 4.0)
-    lin = lin * gain[..., None]
+    lin = lin * np.clip(np.power(np.clip(lp, 0, 1), 2.2) / Y, 0, 4.0)[..., None]
 
-    # 2) 光の色（広い範囲の平均が中心）と暗部の色
-    illum = chroma_v(bst['hi_rgb'] * 0.5 + bst['mean_rgb'] * 0.5, CHROMA_LIMIT)
+    # 2) その場の光：色（tint）と明るさ（exposure）
     lin = lin * (1 + (illum - 1) * prm['tint'])
-    L = luma(lin)[..., None]
-    shadow_col = chroma_v(bst['lo_rgb'], CHROMA_LIMIT) * L
-    lin = lin + (shadow_col - lin) * prm['shadow_tint'] * np.power(1 - np.clip(L, 0, 1), 3)
+    # 色を乗せて 1 を超えた分は、輝度を保ったまま彩度を下げて収める（明るい肌が濁らない）
+    L = np.minimum(luma(lin), 1.0)[..., None]
+    mx = lin.max(-1, keepdims=True)
+    lin = L + (lin - L) * np.minimum(1.0, (1 - L) / np.maximum(mx - L, 1e-5))
+    lin = lin * (gain ** prm['exposure'])
 
-    # 3) 自動陰影：局所は「明暗」だけ。色は上下の環境光（空側と地面側）から、広く・弱く
+    # 3) 空気の色：暗い所ほど、背景の暗部の色が乗る
+    k = 1 - np.clip(luma(lin), 0, 1)[..., None]
+    lin = lin + air * prm['shadow_tint'] * k * k
+
+    # 4) 自動陰影：背後がまわりより暗ければ影に入り、はっきり明るければ（光源）その色で照らされる。
+    #    中間（昼のふつうの明るさのむら）では何もしない＝背景の色を写り込ませない
     e = sample_bilinear(env, bu, bv)
     eL = np.maximum(e @ LUMA, 1e-4)[..., None]
     mL = max(float(bst['mean_rgb'] @ LUMA), 1e-4)
-    rel = np.clip(eL / mL, *LOCAL_REL)
+    rel = eL / mL
     sh = prm['shading']
-    lin = lin * np.power(rel, sh * 0.6)
-    top = env[:GRID_H // 3].reshape(-1, 3).mean(0)
-    bot = env[-GRID_H // 3:].reshape(-1, 3).mean(0)
-    wv = smoothstep(0.1, 0.9, v)[..., None]               # 前景の上端 0 → 下端 1（前景自身の上下）
-    amb = chroma_v(top, 0.2) * (1 - wv) + chroma_v(bot, 0.2) * wv
-    lin = lin * (1 + (amb - 1) * 0.6 * min(sh, 1.5))
-    lv = np.clip(((top @ LUMA) * (1 - wv) + (bot @ LUMA) * wv) / mL, 0.8, 1.25)
-    lin = lin * np.power(lv, sh * 0.3)
+    lin = lin * np.power(np.clip(rel, SHADE_MIN, 1.0), sh * 0.6)
+    ec = e / eL
+    ec = 1 + (ec - 1) * np.minimum(1.0, 0.6 / np.maximum(np.abs(ec - 1).max(-1, keepdims=True), 1e-4))
+    lit = smoothstep(SOURCE_REL[0], SOURCE_REL[1], rel)
+    lin = lin * (1 + ec * lit * sh * 0.8)
 
-    # 4) 縁の光（色は彩度を抑える）
-    am = np.pad(a, 1)
+    # 5) 縁の光（ライトラップ）：背後が平均より明るく、光が来る側の縁だけ
     acc = np.zeros_like(a)
     gx = np.zeros_like(a)
     gy = np.zeros_like(a)
@@ -346,12 +370,10 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     ll = np.sqrt(lx * lx + ly * ly) + 1e-5
     facing = np.clip(nx * lx / ll + ny * ly / ll, -1, 1)
     dirw = np.clip(1 + (np.clip(facing * 0.5 + 0.5, 0, 1) * 2 - 1) * prm['rim_dir'], 0, 2)
-    rim_c = chroma_v(bst['hi_rgb'], 0.25)
-    rel_r = eL / mL
-    rim_col = rim_c * np.clip(eL * 1.5, 0, 1) * smoothstep(0.7, 1.6, rel_r) * 1.5
+    rim_col = illum * np.clip(eL * 1.5, 0, 1) * smoothstep(0.9, 1.8, rel)
     lin = 1 - (1 - lin) * (1 - np.clip(rim_col * (edge * prm['rim'] * dirw)[..., None], 0, 1))
 
-    # 5) 手置きの光と影（旧方式と同じ）
+    # 6) 手置きの光と影
     aspect = fg_px_w / fg_px_h
     for key in ('light1', 'light2'):
         pp = prm[key]
@@ -360,7 +382,7 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
             continue
         m = m[..., None]
         if pp['amount'] < 0:
-            col = np.array(pp['color']) if pp['color'] is not None else np.clip(chroma_v(bst['lo_rgb'], CHROMA_LIMIT) * 0.35, 0, 1)
+            col = np.array(pp['color']) if pp['color'] is not None else np.clip(chroma_v(bst['lo_rgb'], 0.45) * 0.35, 0, 1)
             lin = lin * (1 + (col - 1) * m * -pp['amount'])
         else:
             col = np.array(pp['color']) if pp['color'] is not None else np.clip(bst['hi_rgb'] / max(bst['hi_rgb'].max(), 1e-4), 0, 1)
@@ -369,6 +391,12 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     out = lin_to_srgb(lin)
     out = src + (out - src) * prm['strength']
     return np.concatenate([np.clip(out, 0, 1), a[..., None]], -1)
+
+
+def chroma_v(c, limit):
+    c = c / max(float(c @ LUMA), 1e-4)
+    dev = float(np.abs(c - 1).max())
+    return 1 + (c - 1) * min(1.0, limit / max(dev, 1e-4))
 
 
 # ---------------------------------------------------------------- Finish（仕上げ）

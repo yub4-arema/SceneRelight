@@ -1,6 +1,6 @@
 # obs-harmonizer 引き継ぎ資料
 
-最終更新: 2026-11-16 / リポジトリ: `yub4-arema/obs-harmonizer` / 作業ブランチ: `claude/blissful-dijkstra-ie3i86`
+最終更新: 2026-11-16（v3 を反映） / リポジトリ: `yub4-arema/obs-harmonizer` / 作業ブランチ: `claude/blissful-dijkstra-ie3i86`
 
 このファイルだけ読めば、経緯・現状・次にやることが分かるように書いています。
 
@@ -22,12 +22,12 @@ OBS Studio 用のフィルター・プラグイン（C + HLSL 風 `.effect`、GP
 | `src/harmonizer-filter.c` | Harmonizer 本体（プロパティ定義、前処理パスの駆動） |
 | `src/finish-filter.c` | Finish 本体 |
 | `data/effects/harmonizer.effect` | 本体シェーダー（**参照実装と同じ式**） |
-| `data/effects/harmonizer-prep.effect` | 前処理（背景を 256x144 → 32x18 に畳み、統計 4x1、環境光マップ、前景統計） |
+| `data/effects/harmonizer-prep.effect` | 前処理（背景を 256x144 → 32x18 に畳み、統計 6x1、環境光マップ、前景統計） |
 | `data/locale/{ja-JP,en-US}.ini` | 表示文字列 |
 | `tools/reference.py` | 参照実装 |
 | `tests/headless_test.py` | OBS をヘッドレスで動かす実機テスト（Linux、要 obs-studio / xvfb） |
 
-調整できるパラメータ（現在の初期値）: `strength=1.0`, `tint=0.7`, `exposure=0.35`, `contrast=0.4`, `shadow_tint=0.35`, `shading=1.0`, `shading_spread=4.0`, `rim=0.6`, `rim_width=4.0`, `rim_dir=0.85`、手置きライト 2 枠。
+調整できるパラメータ（現在の初期値。v3）: `strength=1.0`, `tint=0.8`, `exposure=0.8`, `contrast=0.0`, `shadow_tint=0.6`, `shading=1.0`, `shading_spread=4.0`, `rim=0.4`, `rim_width=4.0`, `rim_dir=0.85`、手置きライト 2 枠。第 1 回の評価（2.2〜2.4 節）は旧方式・旧初期値でのもの。
 
 ## 2. これまでにやったこと
 
@@ -77,48 +77,83 @@ OBS Studio 用のフィルター・プラグイン（C + HLSL 風 `.effect`、GP
 2. **自動陰影**: `shade = pow(rel, shading*0.8) * (1 + (e/eL - 1) * 0.5 * shading)`。`e` は「前景の背後にある背景の色」で、**彩度の制限なし**。川の水色や木の緑が前景に直接乗る（＝写り込み）。`rel` の範囲も 0.25〜2.5 と広く、背景の暗い木陰の前では前景が大きく暗くなる。
 3. **光の色・縁の光**: 彩度上限 0.45（光の色）と制限なし（縁の光 `e/eL`）。青空や川の色に引っ張られる。
 
-## 3. 現在の作業状態（未コミット）
+## 3. 現在の作業状態（v3。コミット・プッシュ済み）
 
-`tools/reference.py` に**新方式 `harmonize`（v2）を追加済み**（`git diff` で確認可）。旧方式は `harmonize_legacy` として残し、`prm['legacy']=True` で切り替えられる。**未コミット・未検証**（動くことだけ確認済み。見た目の比較も数値評価もまだ）。
+利用者の目標: **どんな背景でも、立ち絵やキャラが「そこにいる」感じを出す**。利用者の好み: 夜、はっきりした光源の下、影の中のように、光の状況がはっきりしている場面は写実的に効いているのが好き。
 
-v2 の変更点:
+v2（前回の案）は見比べた結果、不採用にした。昼は肌が青白くなり（光の色を平均寄りの色から取っていたため空の青を拾う）、夜はほとんど変化しなかった。
 
-1. 明るさ・コントラストは**輝度だけ**を動かす。黒と白を固定したべき乗カーブで、指数を `EXPO_P=(0.8, 1.25)` に制限。色相は保つ。白（lp>0.7）は崩さない。
-2. 光の色は `hi*0.5 + mean*0.5` から作り、彩度上限を `CHROMA_LIMIT=0.28` に下げた（旧 0.45）。暗部の色も同様。
-3. 自動陰影は、局所は**明暗だけ**（`rel` を `LOCAL_REL=(0.6, 1.6)` に制限、指数 `shading*0.6`）。色は背景全体の上側 1/3（空側）と下側 1/3（地面側）の環境光から、前景自身の上下に沿って弱く乗せる（立体感）。
-4. 縁の光の色は、背景全体のハイライト色（彩度上限 0.25）にした。
-5. 手置きの光と影は旧方式と同じ。
+**v3 を参照実装（`tools/reference.py` の `harmonize`）とシェーダーの両方に入れた**。旧方式は参照実装にだけ `harmonize_legacy`（`prm['legacy']=True`）として残してある。
 
-注意: **`data/effects/harmonizer.effect`（シェーダー）はまだ旧方式のまま**。参照実装とシェーダーは「同じ式」という約束なので、v2 を採用するならシェーダーも移植が必要。
+v3 の考え方（「その場の光で照らされた前景」を作る）:
 
-## 4. 次にやること（提案）
+1. **光の色**: 明るい場面では背景の「白」（チャンネルごとの 12 乗平均。昼なら雲の白）を光の色とみなす。昼の空や川の青は光の色とみなさないので、**昼はほぼ何もしない**。暗い場面（夜）と、暖色のかぶり（赤 > 緑 > 青＝夕日）は、明るい側の平均の色を使う。色を乗せて 1 を超えた分は、輝度を保ったまま彩度を下げて収める。
+2. **明るさ**: 背景の明るい側の輝度が低いほど（夜）、前景を暗くする（下限 0.3 倍）。明るい場面では変えない。旧方式の「前景の平均に対する倍率」はやめた（髪の白飛びの原因）。
+3. **空気の色**: 暗い所（黒い服・髪）に、背景の暗部の色を加える。
+4. **自動陰影**: 背後がまわりより暗ければ影に入る（比 0.35〜1 を指数 0.6 で）。背後がまわりの 1.3〜3 倍以上明るければ光源とみなし、その色で照らす。中間では何もしない（＝背景の色を写り込ませない）。
+5. **縁の光**: 背後がまわりより明るい側の縁だけ、その場の光の色で光らせる。
+6. コントラストの追従は残したが初期値 0。手置きの光と影は旧方式と同じ。
 
-1. **v2 の評価**
-   - 旧方式と v2 を、川・昼などの失敗ケースで並べて見比べる（`handover/scripts/gen.py` の `render()` を `legacy` 付きと無しで呼べばよい）。
-   - 数値の指標も取る: 髪領域（前景の上側 25%）の ΔL・色相の変化、前景全体の ΔE、背景の局所色と前景の色変化の相関（写り込みの目安）。目標は「髪の明るさが大きく変わらない」「背景色の写り込みが減る」「かといってなじまなさ過ぎない」。
-2. **初期値の見直し**: 評価では標準が強すぎた。`shading` や `exposure` の初期値を弱める案（全体 0.5 相当）。
-3. **昼の屋外**に絞った深掘り: 背景の影（左の木陰など）に合わせて、手置きの影で前景に影を足す案。
-4. **シェーダーへ移植**: `data/effects/harmonizer.effect` を v2 に合わせる。前処理（上側・下側の環境光平均）は `data/effects/harmonizer-prep.effect` と `src/harmonizer-filter.c` の統計に追加が要る可能性がある（現在の統計は平均・ハイライト・暗部・重心の 4x1 のみ）。新しいプロパティを足す場合は `data/locale/*.ini` も更新。
-5. **実機テスト**: `tests/headless_test.py`（OBS をヘッドレスで動かす）。このセッションの環境では obs-studio が入っておらず未実行。`sudo apt install obs-studio xvfb python3-numpy python3-pil libx11-dev` が必要。
-6. 追加の評価ラウンドが必要なら、`handover/scripts/gen.py` と `page2.tpl.html` を流用して同じ形式で作れる。
+初期値: `tint=0.8`, `exposure=0.8`, `contrast=0.0`, `shadow_tint=0.6`, `shading=1.0`, `rim=0.4`（他は変更なし）。
+
+移植で変えた所:
+
+- `data/effects/harmonizer-prep.effect`: 統計を 4x1 → **6x1** に（4: その場の白、5: その場の黒）。
+- `src/harmonizer-filter.c`: 統計の描画先を 6x1 に、初期値を上のとおりに。
+- `data/effects/harmonizer.effect`: 本体を v3 に。
+- `data/locale/*.ini`、`README.md`: 項目名と説明を v3 に合わせた。
+
+**実機テストは通過**（OBS 30.0.2、`xvfb-run -a python3 tests/headless_test.py build_x86_64`。全項目 ok。OBS の出力と参照実装の差は平均 0.0041）。
+
+### 3.1 第 2 回の評価（3 値）
+
+利用者の提案で、**「もっと欲しい／程よい／やりすぎ」の 3 値**で付ける形にした。主な判断は作業者（Claude）がして、利用者は単純な確認で補佐する、という分担。
+
+- 評価ページ: `https://claude.ai/artifact/BXLN834CTocUc2q14tt3Ct`（非公開）。15 背景 × 2 キャラ = 30 枚、v3 の初期値のまま。ボタンか画像を押している間は「なじませ前」を表示して見比べられる。
+- 保存先は Artifact の `db`、コレクション `ratings`、ドキュメント id はタイル id（例 `river1_josei07`。数字は 1 昼 / 2 夕方 / 3 夜）、中身は `{v: "more" | "ok" | "over"}`。
+- 生成は `handover/scripts/gen3.py`（画像）と `handover/scripts/page3.tpl.html`（ページ。`__TILES__` を `tiles.json` の中身に置換）。
+- **この資料を書いた時点では、まだ 1 件も付いていない**。
+
+## 4. 次にやること
+
+1. 第 2 回の評価を読む（ArtifactData の `list` で `ratings`）。時間帯・背景ごとに「もっと欲しい」「やりすぎ」の偏りを見て、該当する係数を動かす。
+   - 夜に「もっと欲しい」が多い → `GAIN_MIN`、`LEVEL_REF`、`CHROMA_LIMIT`。「やりすぎ」なら逆。
+   - 夕方 → 暖色の判定（`scene_light` の smoothstep(0, 0.15)）と `tint`。
+   - 昼に「もっと欲しい」が多い → 昼は今ほぼ素通し。影（`SHADE_MIN`）や縁の光、手置きの影の自動化を検討。
+   - 係数を変えたら、参照実装とシェーダーの両方を同じ値にし、実機テストを回す。
+2. 作業者の目で気になっている点（未解決）:
+   - 夕方、暗い髪・黒い服のキャラは色づきが分かりにくく、少し暗く見える（数値上は顔は暗くなっていない）。
+   - 夜の都市（明るい看板が多い）は「明るい場面」に近い扱いになり、変化が小さい。
+   - 光源の真後ろにいる場合（逆光）も「照らされる」扱いで前面が明るくなる。本来は縁だけが光る。
+3. 足元の接地影は、フィルターが前景の範囲の外に描けないため未対応（シーン側に掛ける Finish か、別のフィルターが要る）。
 
 ## 5. 環境・運用の注意
 
 - **画像と評価ページの素材は再配布不可**。リポジトリに入れない。Artifact は非公開のまま、他人に共有しない。
 - 素材サイトへのアクセスは通常のアクセスで、1 秒間隔にした。`min-chi.material.jp` の一覧ページ（`/tag/.../page/2/` など）は連続アクセスで 403 になった。**ブラウザのふりをして回避しない**こと（実際に拒否された）。素材ページの案内どおり、個別の素材ページと素材ファイルを取得する。
-- このセッションのネットワークは制限なしに変更済み。ただし WebFetch ツールは名前解決に失敗したため、`curl` で取得した。
+- 素材は `curl` で取得した（背景は `https://min-chi.material.jp/mc/materials/background-c/<slug>/_<slug>_<n>.jpg`、立ち絵は `https://wataokiba.net/wp-content/uploads/<年>/<月>/<名前>.png`。josei06・07 は 2018/06、josei12 は 2019/03、josei17 は 2020/12）。
 - 作業用の中間ファイル（素材画像、生成画像、評価ページの一式）は、セッションのスクラッチ領域にあり、**消える可能性がある**。必要なものは `handover/` に写してある（スクリプト、評価結果）。画像は `gen.py` で再生成できる。
-- `handover/` と `tools/reference.py` の変更は**未コミット**。コミットや PR はまだ作っていない（依頼されていないため）。
+- 変更はすべて作業ブランチにコミット・プッシュ済み。PR は作っていない（依頼されていないため）。
 - 利用者は日本語で話すことを希望している。
 
 ## 6. 再現手順（要点）
 
 ```bash
-# 参照実装で 1 枚合成（旧方式にしたい場合は prm={'legacy': True} を run() に渡す）
+# 参照実装で 1 枚合成（旧方式と比べたい場合は prm={'legacy': True} を run() に渡す）
 python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png --compare
 
 # 評価画像 180 枚の再生成（背景は bg2/<slug>_<1-3>.jpg、立ち絵は fg/<name>.png に置く）
 python3 handover/scripts/gen.py
+
+# 第 2 回（3 値評価）の画像 30 組
+python3 handover/scripts/gen3.py
+
+# 素・旧方式・v3 を横に並べた比較画像（作業ディレクトリ, 出力, キャラ, 背景をカンマ区切り, x, 高さ）
+python3 handover/scripts/cmp.py . out.jpg josei07 summer_river_1,shrine_3 0.3 0.66
+
+# 実機テスト（要 obs-studio libobs-dev ninja-build libx11-dev xvfb）
+cmake --preset ubuntu-x86_64 -DHZ_BUILD_TOOLS=ON && cmake --build build_x86_64
+xvfb-run -a python3 tests/headless_test.py build_x86_64
 ```
 
 ## 7. 付属ファイル
@@ -126,6 +161,8 @@ python3 handover/scripts/gen.py
 - `handover/ratings.csv` … 全 180 枚の条件（キャラ・背景・設定・配置）と利用者の 5 段階評価。
 - `handover/scripts/gen.py` … 評価画像の生成スクリプト（設定一覧 P01〜P13 もここ）。
 - `handover/scripts/page2.tpl.html` … 評価ページのテンプレート（`__TILES__` を画像一覧の JSON に置換して使う）。
+- `handover/scripts/gen3.py`、`page3.tpl.html` … 第 2 回（3 値評価）の画像生成とページのテンプレート。
+- `handover/scripts/cmp.py` … 素・旧方式・v3 を並べた比較画像を作る。
 - `handover/scripts/t2.js` … 評価ページを模擬の保存先でテストする Playwright スクリプト。
 
 設定 P01〜P13 の内容（`gen.py` から抜粋）:
