@@ -62,24 +62,55 @@
 python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png --compare --finish
 ```
 
+## インストール
+
+[Releases](https://github.com/yub4-arema/obs-harmonizer/releases) から OS に合ったファイルをダウンロードします。
+
+- **Windows**: zip を展開し、中の `obs-plugins` と `data` を OBS のインストール先（通常は `C:\Program Files\obs-studio`）にフォルダごと上書きコピーします
+- **macOS**: `.pkg` を実行します
+- **Linux**: `.deb` を `sudo apt install ./ファイル名.deb` で入れます
+
+OBS を再起動すると、フィルターの一覧に追加されます。
+
 ## ビルド
 
 [obs-plugintemplate](https://github.com/obsproject/obs-plugintemplate) の構成に従っています。
 
+### Windows
+
+必要なもの：
+
+- Visual Studio 2022（「C++ によるデスクトップ開発」ワークロード。Windows SDK 10.0.22621 以降を含む）
+- CMake 3.28 以降
+- Git
+
 ```
-# Linux（Ubuntu 24.04 で確認）
-sudo apt install libobs-dev cmake ninja-build
+cmake --preset windows-x64
+cmake --build --preset windows-x64 --config RelWithDebInfo
+```
+
+OBS のソースと依存ライブラリは、初回の構成時に自動で取得されます。
+
+### macOS
+
+必要なもの：Xcode 16 以降、CMake 3.28 以降
+
+```
+cmake --preset macos
+cmake --build --preset macos
+```
+
+### Linux（Ubuntu 24.04 で確認）
+
+```
+sudo apt install build-essential cmake ninja-build pkg-config libobs-dev
 cmake --preset ubuntu-x86_64
 cmake --build build_x86_64
 ```
 
-Windows と macOS は `cmake --preset windows-x64` / `cmake --preset macos` でビルドします（OBS のソースと依存は自動で取得されます）。
-GitHub Actions で 3 つの OS のビルドが走ります。
-
 ## テスト
 
-Linux では OBS をヘッドレス（Xvfb と Mesa のソフトウェア描画）で動かし、実際にフィルターを掛けた 1 フレームを確かめます。
-テストには合成画像だけを使います。
+Linux では OBS をヘッドレス（Xvfb と Mesa のソフトウェア描画）で動かし、実際にフィルターを掛けた 1 フレームを確かめます。テストには合成画像だけを使います。
 
 ```
 sudo apt install obs-studio xvfb python3-numpy python3-pil libx11-dev
@@ -87,23 +118,6 @@ cmake --preset ubuntu-x86_64 -DHZ_BUILD_TOOLS=ON
 cmake --build build_x86_64
 xvfb-run -a python3 tests/headless_test.py build_x86_64
 ```
-
-確かめる内容：シェーダーのコンパイル、背景は変えないこと、白が背景の光の色に寄ること、陰影が背景の明暗の向きに従うこと、OBS の出力と参照実装の一致（平均誤差 0.5% 程度）、仕上げフィルターが効くこと。
-
-## 現状と制限
-
-- 動作を確かめたのは Linux（OBS 30.0、OpenGL）だけです。Windows（Direct3D 11）と macOS ではビルドは CI で通しますが、実機ではまだ試していません
-- 前景か背景がグループの中にある場合、シーン内の配置を読めません。その場合は「前景と背景がキャンバス全面で重なっている」とみなします
-- シーン内の配置読み取りは、ソースのクロップを考えていません
-- HDR（OBS の高色域モード）は考えていません。SDR の sRGB として処理します
-
-## 類似のもの（2026-11 時点で調べた範囲）
-
-背景に合わせて前景の色・陰影を自動で変える OBS プラグインは見当たりませんでした。近いものは次のとおりです。
-
-- [halsu plugins for streaming](https://obsproject.com/forum/resources/halsu-plugins-for-streaming.2374/) の relightwrap … 縁のライトラップと疑似リライティング（Windows のみ）
-- [obs-shaderfilter](https://github.com/exeldro/obs-shaderfilter) … 自作シェーダーを掛けられる。色合わせは自分で書く必要がある
-- OBS 標準の色補正・LUT … 手動で調整する。背景が変わるたびに調整し直しになる
 
 ## ライセンス
 
