@@ -140,14 +140,19 @@ float4 PSHarmonize(VertData v) : TARGET
 	float3 hi = max(bg_hi, float3(0.0001, 0.0001, 0.0001));
 	float hl = hz_luma(hi);
 	float3 ch = hi / hl;
-	float wt = smoothstep(0.45, 0.62, hl) * (1.0 - smoothstep(0.0, 0.15, min(ch.r - ch.g, ch.g - ch.b)));
-	float3 wcol = lerp(hi, max(bg_white, float3(0.0001, 0.0001, 0.0001)), wt);
+	// 暖色は「白」まで暖色のときだけ（紅葉や赤い屋台のように、昼の光の下で物が暖色なだけの場面を除く）
+	float3 wh = max(bg_white, float3(0.0001, 0.0001, 0.0001));
+	float3 cw = wh / hz_luma(wh);
+	float warm = smoothstep(0.0, 0.15, min(ch.r - ch.g, ch.g - ch.b)) * smoothstep(0.0, 0.1, min(cw.r - cw.g, cw.g - cw.b));
+	float wt = smoothstep(0.45, 0.62, hl) * (1.0 - warm);
+	float3 wcol = lerp(hi, wh, wt);
 	wcol = wcol / hz_luma(wcol);
 	float3 wd = abs(wcol - one);
 	float dev = max(max(wd.r, wd.g), wd.b);
 	// 不感帯は「白」を使うときだけ（昼の空の青み対策）。夜や夕方の色はそのまま使う
 	float knee = lerp(1.0, smoothstep(0.1, 0.35, dev), wt);
 	float3 illum = one + (wcol - one) * knee * min(1.0, 0.55 / max(dev, 0.0001));
+	illum.r = max(illum.r, 0.8); // 青緑の光で肌が土気色にならないよう、赤を減らす下限
 	float gain = clamp(hl / 0.5, 0.3, 1.0);
 	float3 air = bg_black * 0.5;
 	air = air * min(1.0, 0.03 / max(hz_luma(air), 0.00001));
@@ -188,7 +193,7 @@ float4 PSHarmonize(VertData v) : TARGET
 	float ss = hz_luma(s3);
 	float3 ec = s3 / max(ss, 0.00001);
 	float3 ed = abs(ec - one);
-	ec = one + (ec - one) * min(1.0, 0.8 / max(max(max(ed.r, ed.g), ed.b), 0.0001));
+	ec = one + (ec - one) * min(1.0, 0.5 / max(max(max(ed.r, ed.g), ed.b), 0.0001));
 	float lit = ss / (ss + 0.25) * night;
 	float3 band = hz_edge(v.uv, src.a, float2(0.06 / aspect, 0.06));
 	float sx = hz_luma(hz_src(buv + float2(dd.x, 0.0)) - hz_src(buv - float2(dd.x, 0.0)));

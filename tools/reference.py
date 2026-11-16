@@ -278,6 +278,7 @@ GAIN_MIN = 0.3          # 暗くする下限
 DARK_SCENE = (0.45, 0.62) # 暗い場面（夜）では、光の色を白ではなく明るい側の平均から取る
 CHROMA_KNEE = (0.1, 0.35)  # 光の色の立ち上がり（これ以下のずれは昼の空の青み程度とみなして使わない）
 CHROMA_LIMIT = 0.55     # 光の色の彩度の上限
+RED_MIN = 0.8           # 光の色で赤を減らす下限（青緑の光で肌が土気色にならないように）
 AIR_MAX = 0.03          # 空気の色の輝度の上限（明るい背景で黒が白っぽく浮かないように）
 SHADE_MIN = 0.35        # 影：背後の明るさの比の下限
 SOURCE_T = 2.0          # 光源：背景の平均のこの倍より明るい所を光源とみなす（昼の雲や空は入らない）
@@ -291,16 +292,22 @@ def scene_light(bst):
     hl = float(hi @ LUMA)
     # 明るい場面は「白」を光の色とみなす。暗い場面（夜）は白い物が無いので、明るい側の平均を使う
     t = float(smoothstep(DARK_SCENE[0], DARK_SCENE[1], hl))
-    # ただし暖色（赤 > 緑 > 青）のかぶりは夕日などの光の色なので、明るくても平均側を使う
+    # ただし暖色（赤 > 緑 > 青）のかぶりは夕日などの光の色なので、明るくても平均側を使う。
+    # 「白」まで暖色のときだけ（紅葉や赤い屋台のように、昼の光の下で物が暖色なだけの場面を除く）
     ch = hi / hl
-    t *= 1 - float(smoothstep(0.0, 0.15, min(ch[0] - ch[1], ch[1] - ch[2])))
-    w = hi * (1 - t) + np.maximum(bst['white_rgb'], 1e-4) * t
+    wh = np.maximum(bst['white_rgb'], 1e-4)
+    cw = wh / float(wh @ LUMA)
+    warm = float(smoothstep(0.0, 0.15, min(ch[0] - ch[1], ch[1] - ch[2])))
+    warm *= float(smoothstep(0.0, 0.1, min(cw[0] - cw[1], cw[1] - cw[2])))
+    t *= 1 - warm
+    w = hi * (1 - t) + wh * t
     c = w / float(w @ LUMA)
     dev = float(np.abs(c - 1).max())
     # 不感帯は「白」を使うときだけ（昼の空の青み対策）。夜や夕方の色はそのまま使う
     knee = float(smoothstep(CHROMA_KNEE[0], CHROMA_KNEE[1], dev))
     k = (1 - t + t * knee) * min(1.0, CHROMA_LIMIT / max(dev, 1e-4))
     illum = 1 + (c - 1) * k
+    illum[0] = max(illum[0], RED_MIN)
     gain = float(np.clip(hl / LEVEL_REF, GAIN_MIN, 1.0))
     air = bst['black_rgb'] * 0.5
     air = air * min(1.0, AIR_MAX / max(float(air @ LUMA), 1e-5))
@@ -381,7 +388,7 @@ def harmonize(fg, fg_to_bg, env, bst, fst, prm, fg_px_w, fg_px_h):
     s3 = e4[..., 3:6] / mL
     ss = (s3 @ LUMA)[..., None]
     ec = s3 / np.maximum(ss, 1e-5)
-    ec = 1 + (ec - 1) * np.minimum(1.0, 0.8 / np.maximum(np.abs(ec - 1).max(-1, keepdims=True), 1e-4))
+    ec = 1 + (ec - 1) * np.minimum(1.0, 0.5 / np.maximum(np.abs(ec - 1).max(-1, keepdims=True), 1e-4))
     lit = ss / (ss + SOURCE_HALF) * night
     band, bnx, bny = edge_normal(SIDE_R * h / w, SIDE_R)
     sx, sy = env_grad(lambda c: c[..., 3:6] @ LUMA)
