@@ -3,7 +3,7 @@
 配信で、前景（立ち絵・アバター）を背景の色味と光に自動でなじませる OBS フィルターです。
 背景ソースを指定するだけで、その場に立っているように見せます。背景が動いても毎フレーム追従します。
 
-*English: OBS filters that automatically match a foreground (avatar / character art) to a background source — light color, exposure, contrast, directional shading and rim light — plus a finishing filter (halftone, grain, light leak). GPU only, no CPU readback. GPL-2.0-or-later.*
+*English: OBS filters that automatically match a foreground (avatar / character art) to a background source — the scene's light color and brightness, shade, light from bright sources in the background (street lamps, windows, signs) and rim light — plus a finishing filter (halftone, grain, light leak). GPU only, no CPU readback. GPL-2.0-or-later.*
 
 ## できること
 
@@ -118,6 +118,8 @@ data/       OBS がプラグインの data として読むファイル
               locale/            表示文字列（ja-JP.ini, en-US.ini）
 tools/      参照実装（reference.py）とヘッドレス描画ツール
 tests/      ヘッドレスのテスト
+handover/   開発の記録（見た目の評価の結果、評価用の画像を作るスクリプト）。使うだけなら不要です
+CHANGELOG.md  変更履歴
 cmake/ build-aux/ .github/ CMakePresets.json buildspec.json
             obs-plugintemplate 由来のビルド設定とワークフロー
 ```
@@ -163,11 +165,15 @@ cmake --build build_x86_64
 Linux では OBS をヘッドレス（Xvfb と Mesa のソフトウェア描画）で動かし、実際にフィルターを掛けた 1 フレームを確かめます。テストには合成画像だけを使います。
 
 ```
-sudo apt install obs-studio xvfb python3-numpy python3-pil libx11-dev
+sudo apt install obs-studio libobs-dev ninja-build xvfb python3-numpy python3-pil libx11-dev
 cmake --preset ubuntu-x86_64 -DHZ_BUILD_TOOLS=ON
 cmake --build build_x86_64
 xvfb-run -a python3 tests/headless_test.py build_x86_64
 ```
+
+## 変更履歴
+
+[CHANGELOG.md](CHANGELOG.md) にあります。
 
 ## ライセンス
 
