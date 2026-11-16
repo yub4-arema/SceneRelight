@@ -1,0 +1,206 @@
+<title>なじませ加減チェック</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* レイアウト: スマホ縦 1 カラム。画像 → 3 つの大きなボタン → 前後移動。一覧は同じ画面で切り替え */
+:root{--bg:#f3f4f7;--panel:#ffffff;--fg:#1d2230;--mute:#667086;--line:#d9dde7;--accent:#2a5fd6;--chip:#e8ebf2;
+ --more:#2f6fc4;--ok:#23884f;--over:#c2453d}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14171f;--panel:#1d212c;--fg:#e8ebf3;--mute:#9aa3b8;--line:#2d3342;--accent:#7ea2ff;--chip:#262b39;
+ --more:#6aa5f0;--ok:#56c98a;--over:#f0766c;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14171f;--panel:#1d212c;--fg:#e8ebf3;--mute:#9aa3b8;--line:#2d3342;--accent:#7ea2ff;--chip:#262b39;
+ --more:#6aa5f0;--ok:#56c98a;--over:#f0766c;color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:"Noto Sans JP","Hiragino Sans",system-ui,sans-serif;margin:0;line-height:1.45;
+ padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));-webkit-tap-highlight-color:transparent}
+#app{max-width:680px;margin:0 auto;display:flex;flex-direction:column;gap:10px;padding-block:12px 20px}
+#card{display:flex;flex-direction:column;gap:6px}
+.top{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--mute)}
+.top b{color:var(--fg);font-variant-numeric:tabular-nums}
+.bar{flex:1;height:6px;background:var(--chip);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+.lnk{border:0;background:none;color:var(--accent);font-size:13px;cursor:pointer;font-family:inherit;padding:6px 4px}
+.stage{position:relative;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:pan-y}
+.stage img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#000;border-radius:10px;border:1px solid var(--line);pointer-events:none}
+.which{position:absolute;left:8px;top:8px;background:var(--bg);color:var(--fg);font-size:12px;font-weight:700;border-radius:4px;padding:1px 8px}
+.meta{font-size:13px;color:var(--mute);display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center}
+.tag{background:var(--chip);border-radius:4px;padding:0 6px;font-size:12px}
+.cmp{border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:10px;padding:10px 0;font-size:14px;cursor:pointer;font-family:inherit;touch-action:none;user-select:none;-webkit-user-select:none}
+.cmp[aria-pressed="true"]{background:var(--chip)}
+.q{font-size:13px;color:var(--mute);text-align:center}
+.rate{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.rb{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:72px;border:2px solid var(--c);background:var(--panel);color:var(--fg);border-radius:12px;font-family:inherit;cursor:pointer;padding:6px 2px}
+.rb .n{font-size:16px;font-weight:700;line-height:1.2}
+.rb .w{font-size:11px;color:var(--mute);line-height:1.2;text-align:center}
+.rb[aria-pressed="true"]{background:var(--c);color:var(--bg)}
+.rb[aria-pressed="true"] .w{color:var(--bg)}
+[data-v="more"]{--c:var(--more)}[data-v="ok"]{--c:var(--ok)}[data-v="over"]{--c:var(--over)}
+.nav{display:flex;gap:8px}
+.btn{flex:1;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:10px;padding:12px 0;font-size:14px;cursor:pointer;font-family:inherit}
+.btn:focus-visible,.rb:focus-visible,.lnk:focus-visible,.th:focus-visible,.cmp:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#st{font-size:12px;color:var(--mute);text-align:center;min-height:1.2em}
+#list{display:flex;flex-direction:column;gap:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px}
+.th{position:relative;border:3px solid var(--c,var(--line));border-radius:8px;padding:0;background:#000;cursor:pointer;overflow:hidden;aspect-ratio:16/9}
+.th img{display:block;width:100%;height:100%;object-fit:cover}
+.sum{overflow-x:auto}
+table{border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{border:1px solid var(--line);padding:3px 10px;text-align:center;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+h2{font-size:15px;margin:8px 0 4px}
+.done{text-align:center;padding:24px 0;color:var(--mute);width:100%}
+</style>
+
+<div id="app">
+  <div class="top"><span><b id="pos">0</b> / <b id="total">0</b></span><div class="bar"><i id="barfill"></i></div><span>評価 <b id="done">0</b></span><button class="lnk" id="tolist" type="button">一覧</button></div>
+  <div id="card">
+    <div class="stage" id="stage"><img id="img" alt=""><span class="which" id="which">なじませ後</span></div>
+    <div class="meta" id="meta"></div>
+  </div>
+  <button class="cmp" id="cmp" type="button" aria-pressed="false">押している間、なじませ前を表示</button>
+  <div class="q">なじませの効き具合は？（キャラがその場にいるように見えるか）</div>
+  <div class="rate" id="rate"></div>
+  <div class="nav"><button class="btn" id="prev" type="button">← 前へ</button><button class="btn" id="skip" type="button">あとで →</button></div>
+  <div id="st"></div>
+  <div id="list" hidden></div>
+</div>
+
+<script>
+const TILES = __TILES__;
+const COLL = '__COLL__'; // 回ごとに保存先を分ける（第 2 回: ratings、第 3 回: ratings_r3）
+const V = [['more', 'もっと欲しい', 'まだ浮いている'], ['ok', '程よい', 'そこにいる'], ['over', 'やりすぎ', '色や暗さが不自然']];
+const NAME = {more: 'もっと欲しい', ok: '程よい', over: 'やりすぎ'};
+const state = {}, dirty = {};
+let order = [], idx = 0, db = null, view = 'card', showNaive = false;
+const $ = id => document.getElementById(id);
+
+// シャッフル順は端末に覚えさせる（再読み込みで順番が変わらないように）
+function seeded(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function makeOrder() {
+  let seed; try { seed = +localStorage.getItem('hz3-seed-' + COLL); } catch (e) {}
+  if (!seed) { seed = Math.floor(Math.random() * 2 ** 31) + 1; try { localStorage.setItem('hz3-seed-' + COLL, seed); } catch (e) {} }
+  const r = seeded(seed), a = TILES.map(t => t.id);
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+const tile = id => TILES.find(t => t.id === id);
+const val = id => (state[id] || {}).v || '';
+function setSt(s) { $('st').textContent = s; }
+
+function save(id) {
+  dirty[id] = Date.now();
+  const payload = {v: val(id)};
+  if (db) db.collection(COLL).doc(id).set(payload).then(() => setSt('保存しました'), e => setSt('保存できませんでした: ' + (e && e.code || '')));
+  else try { localStorage.setItem('hz3-' + COLL + '-' + id, JSON.stringify(payload)); setSt('この端末に保存しました'); } catch (e) {}
+}
+
+function buildRate() {
+  V.forEach(([v, n, w]) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'rb'; b.dataset.v = v; b.setAttribute('aria-pressed', 'false');
+    const a = document.createElement('span'); a.className = 'n'; a.textContent = n;
+    const c = document.createElement('span'); c.className = 'w'; c.textContent = w;
+    b.append(a, c); b.onclick = () => rate(v);
+    $('rate').appendChild(b);
+  });
+}
+function rate(v) {
+  const id = order[idx]; if (!id) return;
+  state[id] = {v}; save(id); paint();
+  setTimeout(() => { if (order[idx] === id) go(nextUnrated(idx)); }, 280); // 付けたら次へ。戻って付け直せる
+}
+function nextUnrated(from) {
+  for (let k = 1; k <= order.length; k++) { const i = (from + k) % order.length; if (!val(order[i])) return i; }
+  return order.length;
+}
+function go(i) { idx = Math.max(0, Math.min(order.length, i)); showNaive = false; paint(); }
+const src = (id, naive) => 'img/' + id + (naive ? '_n' : '') + '.jpg';
+
+function stats() {
+  const done = TILES.filter(t => val(t.id)).length;
+  $('total').textContent = TILES.length; $('done').textContent = done;
+  $('barfill').style.width = (done / TILES.length * 100) + '%';
+}
+function paint() {
+  stats();
+  if (view === 'list') return paintList();
+  const finished = idx >= order.length;
+  $('rate').hidden = $('cmp').hidden = $('which').hidden = finished;
+  document.querySelector('.q').hidden = finished;
+  if (finished) {
+    $('img').removeAttribute('src'); $('pos').textContent = order.length;
+    const d = document.createElement('div'); d.className = 'done'; d.textContent = '全部付け終わりました。ありがとう。「一覧」から付け直しができます。';
+    $('meta').replaceChildren(d); return;
+  }
+  const t = tile(order[idx]);
+  $('pos').textContent = idx + 1;
+  const img = $('img'); img.src = src(t.id, showNaive); img.alt = t.bg + '・' + t.time + (showNaive ? '（なじませ前）' : '（なじませ後）');
+  $('which').textContent = showNaive ? 'なじませ前' : 'なじませ後';
+  $('cmp').setAttribute('aria-pressed', String(showNaive));
+  $('meta').replaceChildren(...[t.bg + '・' + t.time, t.fg].map(x => { const s = document.createElement('span'); s.className = 'tag'; s.textContent = x; return s; }));
+  document.querySelectorAll('.rb').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === val(t.id))));
+  new Image().src = src(t.id, true); // 見比べ用と次の画像を先読み
+  const n = order[idx + 1]; if (n) new Image().src = src(n, false);
+}
+
+function paintList() {
+  const L = $('list'); L.textContent = '';
+  const h = document.createElement('h2'); h.textContent = '一覧（タップでその画像へ）'; L.appendChild(h);
+  const g = document.createElement('div'); g.className = 'grid';
+  order.forEach((id, i) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'th'; if (val(id)) b.dataset.v = val(id);
+    b.setAttribute('aria-label', id + ' ' + (NAME[val(id)] || '未評価'));
+    const im = document.createElement('img'); im.loading = 'lazy'; im.src = src(id, false); im.alt = '';
+    b.appendChild(im); b.onclick = () => { view = 'card'; showView(); go(i); };
+    g.appendChild(b);
+  });
+  L.appendChild(g);
+  const h2 = document.createElement('h2'); h2.textContent = '時間帯ごとの内訳'; L.appendChild(h2);
+  const wrap = document.createElement('div'); wrap.className = 'sum'; const tb = document.createElement('table');
+  const hd = tb.insertRow(); ['時間帯', 'もっと欲しい', '程よい', 'やりすぎ', '未評価'].forEach(x => { const c = document.createElement('th'); c.textContent = x; hd.appendChild(c); });
+  ['昼', '夕方', '夜'].forEach(tm => {
+    const ts = TILES.filter(t => t.time === tm), c = k => ts.filter(t => val(t.id) === k).length;
+    const r = tb.insertRow(); [tm, c('more'), c('ok'), c('over'), c('')].forEach(x => r.insertCell().textContent = x);
+  });
+  wrap.appendChild(tb); L.appendChild(wrap);
+}
+function showView() {
+  const list = view === 'list';
+  $('list').hidden = !list; $('card').hidden = list; $('rate').hidden = list; $('cmp').hidden = list;
+  document.querySelector('.q').hidden = list; document.querySelector('.nav').hidden = list;
+  $('tolist').textContent = list ? '← カードに戻る' : '一覧'; paint();
+}
+
+$('tolist').onclick = () => { view = view === 'list' ? 'card' : 'list'; showView(); };
+$('prev').onclick = () => go(idx - 1);
+$('skip').onclick = () => go(idx + 1);
+// 見比べ：ボタンか画像を押している間だけ「なじませ前」
+function hold(on) { if (idx >= order.length || showNaive === on) return; showNaive = on; paint(); }
+[$('cmp'), $('stage')].forEach(el => {
+  el.addEventListener('pointerdown', () => hold(true));
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => el.addEventListener(ev, () => hold(false)));
+  el.addEventListener('contextmenu', e => e.preventDefault());
+});
+$('cmp').addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); hold(true); } });
+$('cmp').addEventListener('keyup', () => hold(false));
+document.addEventListener('keydown', e => {
+  if (view !== 'card' || e.target === $('cmp')) return;
+  if (e.key === '1') rate('more'); else if (e.key === '2') rate('ok'); else if (e.key === '3') rate('over');
+  else if (e.key === 'ArrowLeft') go(idx - 1); else if (e.key === 'ArrowRight') go(idx + 1);
+});
+
+// 起動：先に画面を出し、保存先がつながったら評価を読み込む
+order = makeOrder(); buildRate(); paint();
+(async () => {
+  const local = () => { setSt('この端末にだけ保存されます'); TILES.forEach(t => { try { const v = localStorage.getItem('hz3-' + COLL + '-' + t.id); if (v) state[t.id] = JSON.parse(v); } catch (e) {} }); idx = nextUnrated(-1); paint(); };
+  const timer = setTimeout(() => setSt('保存先に接続できません（この端末にだけ保存）'), 10000);
+  try {
+    db = await claude.use('db'); clearTimeout(timer);
+    if (!db) return local();
+    let first = true;
+    db.collection(COLL).onSnapshot(snap => {
+      if (first) { first = false; snap.docs.forEach(d => { if (!dirty[d.id]) state[d.id] = d.data(); }); idx = nextUnrated(-1); paint(); setSt(''); return; }
+      let changed = false;
+      snap.docChanges().forEach(ch => { const id = ch.doc.id; if (dirty[id] || ch.doc.metadata.hasPendingWrites) return; if (ch.type === 'removed') delete state[id]; else state[id] = ch.doc.data(); changed = true; });
+      if (changed) stats();
+    }, e => setSt('読み込みエラー: ' + (e && e.code || '')));
+  } catch (e) { clearTimeout(timer); db = null; local(); }
+})();
+</script>

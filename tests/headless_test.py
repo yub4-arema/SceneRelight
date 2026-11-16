@@ -10,6 +10,7 @@
   4. 前景の陰影が背景の明暗の向きに従う（右が暗い背景 -> 前景も右が暗い）
   5. OBS の出力が tools/reference.py とおおむね一致する
   6. Finish が画面を変える
+  7. 暗い背景の中の光源（街灯）が、近い側から前景を照らす。OBS の出力が参照実装と一致する
 """
 import os
 import subprocess
@@ -42,6 +43,11 @@ def make_assets(d):
     bg = warm * (1 - x) + dark * x
     bg = bg * (0.85 + 0.15 * (1 - y))
     Image.fromarray((np.clip(bg, 0, 1) * 255).astype(np.uint8)).save(os.path.join(d, 'bg.png'))
+    # 夜の背景：暗い青の中、右側に暖色の光源
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    lamp = np.exp(-(((xx - W * 0.72) / (W * 0.05)) ** 2 + ((yy - H * 0.4) / (H * 0.12)) ** 2))
+    night = np.array([0.05, 0.09, 0.2]) * (1 - lamp[..., None]) + np.array([1.0, 0.85, 0.55]) * lamp[..., None]
+    Image.fromarray((np.clip(night, 0, 1) * 255).astype(np.uint8)).save(os.path.join(d, 'bg_night.png'))
     # 前景：白〜灰色の縦長の楕円（縁は少しぼかす）
     fw, fh = 400, 1000
     yy, xx = np.mgrid[0:fh, 0:fw].astype(np.float32)
@@ -54,10 +60,10 @@ def make_assets(d):
     Image.fromarray((fg * 255).astype(np.uint8), 'RGBA').save(os.path.join(d, 'fg.png'))
 
 
-def render(build, d, name, *opts):
+def render(build, d, name, *opts, bg='bg.png'):
     out = os.path.join(d, name + '.rgba')
     cmd = [os.path.join(build, 'hz-headless-render'), os.path.join(build, 'obs-harmonizer.so'),
-           os.path.join(ROOT, 'data'), os.path.join(d, 'bg.png'), os.path.join(d, 'fg.png'), out,
+           os.path.join(ROOT, 'data'), os.path.join(d, bg), os.path.join(d, 'fg.png'), out,
            '--x', '0.5', '--h', '0.9', '--y', '0.95', *opts]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     log = p.stdout + p.stderr
@@ -109,6 +115,15 @@ def main():
         check(diff < 0.03, f'harmonizer: matches reference implementation (mean abs diff {diff:.4f})')
 
         check(np.abs(fin - harm).mean() > 0.01, 'finish: frame changed')
+
+        # 夜と光源
+        night = fix(render(build, d, 'night', bg='bg_night.png'))
+        bgn = Image.open(os.path.join(d, 'bg_night.png'))
+        nv, ref = reference.run(bgn, fg_img, 0.5, 0.95, 0.9, finish_on=False)
+        check(lum(night[y0:y1, mid:x1]) > lum(night[y0:y1, x0:mid]) * 1.15,
+              f'night: lit from the lamp side (left {lum(night[y0:y1, x0:mid]):.3f}, right {lum(night[y0:y1, mid:x1]):.3f})')
+        diff = np.abs(night - ref)[y0:y1, x0:x1].mean()
+        check(diff < 0.03, f'night: matches reference implementation (mean abs diff {diff:.4f})')
 
     if FAILED:
         print(f'\n{len(FAILED)} check(s) failed')

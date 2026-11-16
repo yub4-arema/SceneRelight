@@ -6,7 +6,8 @@
 
 uniform texture2d image;     // 前景（premultiplied, sRGB）
 uniform texture2d env;       // 環境光マップ 32x18（線形 rgb）
-uniform texture2d stats;     // 背景の統計 4x1
+uniform texture2d srcmap;    // 光源マップ 32x18（平均の 2 倍を超えた分の光。線形 rgb）
+uniform texture2d stats;     // 背景の統計 6x1
 uniform texture2d fgstats;   // 前景の統計 1x1
 
 uniform float2 texel;        // 前景の 1 テクセル
@@ -45,7 +46,7 @@ uniform float  l2_auto;
 
 float4 hz_stat(float i)
 {
-	return stats.SampleLevel(pointClamp, float2((i + 0.5) / 4.0, 0.5), 0.0);
+	return stats.SampleLevel(pointClamp, float2((i + 0.5) / 6.0, 0.5), 0.0);
 }
 
 float2 hz_bguv(float2 uv)
@@ -56,6 +57,27 @@ float2 hz_bguv(float2 uv)
 float3 hz_env(float2 buv)
 {
 	return env.SampleLevel(linearClamp, buv, 0.0).rgb;
+}
+
+float3 hz_src(float2 buv)
+{
+	return srcmap.SampleLevel(linearClamp, buv, 0.0).rgb;
+}
+
+// alpha の勾配から、縁の強さ（x）と外向きの法線（yz）を出す。r は uv での半径
+float3 hz_edge(float2 uv, float a, float2 r)
+{
+	float acc = 0.0;
+	float2 grad = float2(0.0, 0.0);
+	for (int i = 0; i < 12; i++) {
+		float t = 6.2831853 * float(i) / 12.0;
+		float2 dir = float2(cos(t), sin(t));
+		float an = image.SampleLevel(linearClamp, uv + dir * r, 0.0).a;
+		acc += an;
+		grad += an * dir;
+	}
+	float2 n = -grad / (length(grad) + 0.00001);
+	return float3(a * saturate(1.0 - acc / 12.0) * 2.0, n);
 }
 
 float hz_light_mask(float kind, float2 pos, float angle, float size, float soft, float2 uv)
@@ -98,65 +120,101 @@ float4 PSHarmonize(VertData v) : TARGET
 
 	float4 s0 = hz_stat(0.0);
 	float4 s1 = hz_stat(1.0);
-	float4 s2 = hz_stat(2.0);
 	float3 bg_mean = s0.rgb;
-	float bg_mlp = s0.a;
 	float3 bg_hi = s1.rgb;
 	float bg_sd = s1.a;
-	float3 bg_lo = s2.rgb;
+	float3 bg_lo = hz_stat(2.0).rgb;
+	float3 bg_white = hz_stat(4.0).rgb;
+	float3 bg_black = hz_stat(5.0).rgb;
 	float4 fs = fgstats.SampleLevel(pointClamp, float2(0.5, 0.5), 0.0);
-	float fg_m = max(fs.r, 0.001);
+	float fg_m = clamp(fs.r, 0.03, 0.97);
 	float fg_sd = max(fs.g, 0.001);
+	float3 one = float3(1.0, 1.0, 1.0);
 
 	float2 buv = hz_bguv(v.uv);
 	float3 lin = hz_srgb_to_lin(src.rgb);
 
-	// 1) 明るさとコントラスト（黒は黒のまま）
-	float s = 1.0 + (clamp(bg_sd / fg_sd, 0.75, 1.35) - 1.0) * contrast;
-	float target_m = fg_m + (bg_mlp - fg_m) * exposure;
-	float3 g = hz_lin_to_srgb(lin);
-	g = target_m * pow(max(g, float3(0.0, 0.0, 0.0)) / fg_m, float3(s, s, s));
-	lin = hz_srgb_to_lin(clamp(g, 0.0, 1.5));
+	// その場の光：色（輝度 1）・明るさの倍率・空気の色
+	// 明るい場面は「白」を光の色とみなす（昼の空や川の青を光の色と取り違えない）。
+	// 暗い場面（夜）と、暖色（赤 > 緑 > 青）のかぶり（夕日）は、明るい側の平均を使う
+	float3 hi = max(bg_hi, float3(0.0001, 0.0001, 0.0001));
+	float hl = hz_luma(hi);
+	float3 ch = hi / hl;
+	// 暖色は「白」まで暖色のときだけ（紅葉や赤い屋台のように、昼の光の下で物が暖色なだけの場面を除く）
+	float3 wh = max(bg_white, float3(0.0001, 0.0001, 0.0001));
+	float3 cw = wh / hz_luma(wh);
+	float warm = smoothstep(0.0, 0.15, min(ch.r - ch.g, ch.g - ch.b)) * smoothstep(0.0, 0.1, min(cw.r - cw.g, cw.g - cw.b));
+	float wt = smoothstep(0.45, 0.62, hl) * (1.0 - warm);
+	float3 wcol = lerp(hi, wh, wt);
+	wcol = wcol / hz_luma(wcol);
+	float3 wd = abs(wcol - one);
+	float dev = max(max(wd.r, wd.g), wd.b);
+	// 不感帯は「白」を使うときだけ（昼の空の青み対策）。夜や夕方の色はそのまま使う
+	float knee = lerp(1.0, smoothstep(0.1, 0.35, dev), wt);
+	float3 illum = one + (wcol - one) * knee * min(1.0, 0.55 / max(dev, 0.0001));
+	illum.r = max(illum.r, 0.8); // 青緑の光で肌が土気色にならないよう、赤を減らす下限
+	float gain = clamp(hl / 0.5, 0.3, 1.0);
+	float3 air = bg_black * 0.5;
+	air = air * min(1.0, 0.03 / max(hz_luma(air), 0.00001));
+	air = air * (1.0 - 0.9 * smoothstep(0.25, 0.55, hl)); // 明るい場面では黒は黒のまま
+	// 光源の光は暗い場面のもの。明るい場面（昼）では、空や日なたを光源と取り違えないよう消す
+	float night = 1.0 - smoothstep(0.45, 0.62, hl);
 
-	// 2) 光の色と暗部の色
-	float3 illum = hz_chroma(bg_hi * 0.6 + bg_mean * 0.4, 0.45);
-	lin = lin * (float3(1.0, 1.0, 1.0) + (illum - float3(1.0, 1.0, 1.0)) * tint);
-	float L = saturate(hz_luma(lin));
-	float3 shadow_col = hz_chroma(bg_lo, 0.45) * L;
-	float k = 1.0 - L;
-	lin = lin + (shadow_col - lin) * shadow_tint * k * k * k;
+	// 1) コントラスト：輝度だけを、前景の平均を軸に動かす。白は崩さない
+	float Y = max(hz_luma(lin), 0.00001);
+	float lp = pow(Y, 1.0 / 2.2);
+	float sc = 1.0 + (clamp(bg_sd / fg_sd, 0.75, 1.35) - 1.0) * contrast;
+	float lp2 = fg_m * pow(lp / fg_m, sc);
+	lp = lerp(lp2, lp, smoothstep(0.7, 1.0, lp));
+	lin = lin * clamp(pow(saturate(lp), 2.2) / Y, 0.0, 4.0);
 
-	// 3) 自動陰影
+	// 2) その場の光の色と明るさ。1 を超えた分は輝度を保ったまま彩度を下げて収める
+	lin = lin * (one + (illum - one) * tint);
+	float L = min(hz_luma(lin), 1.0);
+	float mx = max(max(lin.r, lin.g), lin.b);
+	lin = float3(L, L, L) + (lin - float3(L, L, L)) * min(1.0, (1.0 - L) / max(mx - L, 0.00001));
+	lin = lin * pow(gain, exposure);
+
+	// 3) 空気の色：暗い所ほど、背景の暗部の色が乗る
+	float k = 1.0 - saturate(hz_luma(lin));
+	lin = lin + air * shadow_tint * k * k;
+
+	// 4) 自動陰影：背後がまわりより暗ければ影に入る（暗い場面では、すでに暗くしているので弱める）
 	float3 e = hz_env(buv);
 	float eL = max(hz_luma(e), 0.0001);
 	float mL = max(hz_luma(bg_mean), 0.0001);
-	float rel = clamp(eL / mL, 0.25, 2.5);
-	float3 shade = pow(rel, shading * 0.8) * (float3(1.0, 1.0, 1.0) + (e / eL - float3(1.0, 1.0, 1.0)) * 0.5 * shading);
-	lin = lin * shade;
+	float rel = eL / mL;
+	lin = lin * pow(clamp(rel, 0.35, 1.0), shading * 0.6 * gain);
 
-	// 4) 縁の光
-	float acc = 0.0;
-	float2 grad = float2(0.0, 0.0);
-	for (int i = 0; i < 12; i++) {
-		float t = 6.2831853 * float(i) / 12.0;
-		float2 dir = float2(cos(t), sin(t));
-		float an = image.SampleLevel(linearClamp, v.uv + dir * rim_width * texel, 0.0).a;
-		acc += an;
-		grad += an * dir;
-	}
-	acc /= 12.0;
-	float edge = src.a * saturate(1.0 - acc) * 2.0;
-	float2 n = -grad / (length(grad) + 0.00001);
+	// 5) 光源：背景のはっきり明るい所（街灯・窓・看板）の光が、その色で、近い側から前景を照らす。
+	//    全体をうっすら照らし、光源を向いた側の面（太い帯）を強く照らす
 	float2 dd = float2(1.5 / 32.0, 1.5 / 18.0);
+	float3 s3 = hz_src(buv) / mL;
+	float ss = hz_luma(s3);
+	float3 ec = s3 / max(ss, 0.00001);
+	float3 ed = abs(ec - one);
+	ec = one + (ec - one) * min(1.0, 0.5 / max(max(max(ed.r, ed.g), ed.b), 0.0001));
+	float lit = ss / (ss + 0.25) * night;
+	float3 band = hz_edge(v.uv, src.a, float2(0.06 / aspect, 0.06));
+	float sx = hz_luma(hz_src(buv + float2(dd.x, 0.0)) - hz_src(buv - float2(dd.x, 0.0)));
+	float sy = hz_luma(hz_src(buv + float2(0.0, dd.y)) - hz_src(buv - float2(0.0, dd.y)));
+	float2 sdir = float2(sx, sy) / (length(float2(sx, sy)) + 0.00001);
+	float side = saturate(band.x) * saturate(dot(band.yz, sdir));
+	lin = lin * (one + ec * lit * shading * (0.6 + 1.2 * side));
+
+	// 6) 縁の光（ライトラップ）：背後が平均より明るく、光が来る側の縁だけ。光源の近くでは光源の色で強く
+	float3 ed3 = hz_edge(v.uv, src.a, rim_width * texel);
 	float lx = hz_luma(hz_env(buv + float2(dd.x, 0.0)) - hz_env(buv - float2(dd.x, 0.0)));
 	float ly = hz_luma(hz_env(buv + float2(0.0, dd.y)) - hz_env(buv - float2(0.0, dd.y)));
 	float2 ldir = float2(lx, ly) / (length(float2(lx, ly)) + 0.00001);
-	float facing = clamp(dot(n, ldir), -1.0, 1.0);
+	float facing = clamp(dot(ed3.yz, ldir), -1.0, 1.0);
 	float dirw = clamp(1.0 + (saturate(facing * 0.5 + 0.5) * 2.0 - 1.0) * rim_dir, 0.0, 2.0);
-	float3 rim_col = e / eL * saturate(eL * 1.5) * smoothstep(0.7, 1.6, rel) * 1.5;
-	lin = hz_screen(lin, rim_col * edge * rim * dirw);
+	// 背景の回り込みは、暗い色（黒髪・黒い服）の上では白くぼやけて見えるので弱める
+	float wrap = 0.3 + 0.7 * sqrt(saturate(hz_luma(lin)));
+	float3 rim_col = illum * saturate(eL * 1.5) * smoothstep(1.2, 2.2, rel) * wrap + ec * lit * 1.5;
+	lin = hz_screen(lin, rim_col * ed3.x * rim * dirw);
 
-	// 5) 手置きの光と影
+	// 7) 手置きの光と影
 	float3 auto_shadow = saturate(hz_chroma(bg_lo, 0.45) * 0.35);
 	float3 auto_light = saturate(bg_hi / max(max(bg_hi.r, bg_hi.g), max(bg_hi.b, 0.0001)));
 	lin = hz_apply_light(lin, l1_kind, l1_pos, l1_angle, l1_size, l1_soft, l1_amount, l1_color, l1_auto, v.uv, auto_shadow, auto_light);
