@@ -71,10 +71,9 @@ jobs:
           root_dir="$(pwd)"
           commit_hash="${GITHUB_SHA:0:9}"
 
+          # 公開するのは Windows 版だけ（macOS / Linux は動作を確かめられていないため配布しない）
           variants=(
             'windows-x64;zip|exe'
-            'macos-universal;tar.xz|pkg'
-            'ubuntu-24.04-x86_64;tar.xz|deb|ddeb'
             'sources;tar.xz'
           )
 
