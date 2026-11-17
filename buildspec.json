@@ -38,7 +38,7 @@
     },
     "name": "obs-scene-relight",
     "displayName": "Scene Relight",
-    "version": "1.1.0",
+    "version": "1.2.1",
     "author": "obs-scene-relight contributors",
     "website": "https://github.com/yub4-arema/obs-harmonizer",
     "email": ""

@@ -63,12 +63,10 @@ python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png --co
 
 ## インストール
 
-[Releases](https://github.com/yub4-arema/obs-harmonizer/releases) から OS に合ったファイルをダウンロードします。
+[Releases](https://github.com/yub4-arema/obs-harmonizer/releases) から zip をダウンロードします。現在の配布は **Windows 版のみ** です（macOS / Linux 版は動作を確かめられていないため、配布していません）。
 配置先は OBS 公式の[プラグインガイド](https://obsproject.com/kb/plugins-guide)に準拠しています。
 
 - **Windows**: zip を展開し、中の `obs-scene-relight` フォルダを `C:\ProgramData\obs-studio\plugins` に置きます（公式の推奨場所。下の注意を参照）。
-- **macOS**: `.pkg` を実行します（このインストーラーは `/Library/Application Support/obs-studio/plugins/obs-scene-relight.plugin` に入れます）。
-- **Linux**: `.deb` を `sudo apt install ./ファイル名.deb` で入れます（`/usr/lib/x86_64-linux-gnu/obs-plugins/` と `/usr/share/obs/obs-plugins/obs-scene-relight/` に入ります）。
 
 OBS を再起動すると、フィルターの一覧に追加されます。
 
