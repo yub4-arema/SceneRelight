@@ -22,11 +22,13 @@ MODULE_EXPORT const char *obs_module_description(void)
 
 extern struct obs_source_info harmonizer_filter;
 extern struct obs_source_info finish_filter;
+extern struct obs_source_info lensblur_filter;
 
 bool obs_module_load(void)
 {
 	obs_register_source(&harmonizer_filter);
 	obs_register_source(&finish_filter);
+	obs_register_source(&lensblur_filter);
 	HZ_LOG(LOG_INFO, "loaded (version %s)", PLUGIN_VERSION);
 	return true;
 }

@@ -6,9 +6,11 @@
 
 使い方:
   python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png \
-      [--x 0.62 --y 1.0 --h 0.95] [--finish] [--compare]
+      [--x 0.62 --y 1.0 --h 0.95] [--finish] [--fin glow=0.5 ...] [--lens-blur 2.0] [--compare]
 
 --x/--y は前景の下端中央のキャンバス上の位置（0..1）、--h は前景の高さ（キャンバス比）。
+--fin 名前=値 は Finish の設定（FINISH_DEFAULTS の名前。chromatic, peri_blur, glow, flare など）。複数可。--fin を使うと --finish も有効になる。
+--lens-blur % は、背景に「背景ぼかし」（半径が画面の高さの何 % か）を掛けてから合成する。
 """
 import argparse
 import math
@@ -461,11 +463,191 @@ FINISH_DEFAULTS = dict(
     grain=0.06, grain_size=1.4,
     leak=0.3, leak_size=0.45, leak_auto=1.0, leak_x=0.9, leak_y=0.1,
     vignette=0.25, seed=1.0,
+    # 1.3.0: レンズ・グロー・フレア（量の初期値は 0）
+    chromatic=0.0, peri_blur=0.0,
+    glow=0.0, glow_threshold=0.7, glow_size=0.5,
+    flare=0.0, flare_size=0.3, flare_auto=1.0, flare_x=0.8, flare_y=0.2, flare_streak=0.5, flare_ghost=0.5,
 )
 
 
 def hash21(x, y, seed):
     return np.modf(np.sin(x * 12.9898 + y * 78.233 + seed * 37.719) * 43758.5453)[0] % 1.0
+
+
+# ---------------------------------------------------------------- 縮小・ぼかし（finish.effect の PSBright / PSDown4 / PSDown2 / PSBlur と同じ）
+
+
+def _grid(w, h):
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    return (xx + 0.5) / w, (yy + 0.5) / h
+
+
+def tap_down(src, dw, dh, n, fn=None):
+    """出力 1 画素を n x n 点の bilinear サンプルの平均で作る。fn は各サンプルに掛ける処理"""
+    u, v = _grid(dw, dh)
+    acc = 0
+    for j in range(n):
+        for i in range(n):
+            s = sample_bilinear(src, u + ((i + 0.5) / n - 0.5) / dw, v + ((j + 0.5) / n - 0.5) / dh)
+            acc = acc + (fn(s) if fn else s)
+    return acc / (n * n)
+
+
+def blur9(src, axis):
+    """標準偏差 2 テクセルの 9 点ガウス（axis 0 = 横, 1 = 縦）"""
+    h, w = src.shape[:2]
+    u, v = _grid(w, h)
+    acc, ws = 0, 0.0
+    for i in range(-4, 5):
+        wt = math.exp(-(i * i) / 8.0)
+        uu, vv = (u + i / w, v) if axis == 0 else (u, v + i / h)
+        acc = acc + sample_bilinear(src, uu, vv) * wt
+        ws += wt
+    return acc / ws
+
+
+def level_dim(full, level):
+    return max(1, full >> (level + 2))
+
+
+def build_levels(img4, n, bright=None):
+    """img4: HxWx4（premultiplied）。段 0 は 1/4、以降は 1/2 ずつ。各段はぼかし済み"""
+    h, w = img4.shape[:2]
+    out = []
+    for k in range(n):
+        lw, lh = level_dim(w, k), level_dim(h, k)
+        if k == 0:
+            if bright is not None:
+                def fn(c):
+                    c = c[..., :3]
+                    m = c.max(-1, keepdims=True)
+                    return np.concatenate([c * np.clip((m - bright) / max(1 - bright, 0.02), 0, 1),
+                                           np.ones_like(m)], -1)
+                lv = tap_down(img4, lw, lh, 4, fn)
+            else:
+                lv = tap_down(img4, lw, lh, 4)
+        else:
+            lv = tap_down(out[-1], lw, lh, 2)
+        out.append(blur9(blur9(lv, 0), 1))
+    return out
+
+
+def peak_down(src, dw, dh, n, from_rgb):
+    """出力 1 画素 = n x n 点のうち最も明るいサンプルの (色, 輝度)。PSPeak8 / PSPeak4 と同じ"""
+    u, v = _grid(dw, dh)
+    best = np.zeros((dh, dw, 4), np.float32)
+    best[..., 3] = -1.0
+    for j in range(n):
+        for i in range(n):
+            smp = sample_bilinear(src, u + ((i + 0.5) / n - 0.5) / dw, v + ((j + 0.5) / n - 0.5) / dh)
+            if from_rgb:
+                smp = np.concatenate([smp[..., :3], (smp[..., :3] @ LUMA)[..., None]], -1)
+            best = np.where(smp[..., 3:4] > best[..., 3:4], smp, best)
+    return best
+
+
+def peak_stats(img):
+    """光源の位置・色・明るさ（finish.effect の Peak8 -> Peak4 -> FlareStats）"""
+    h, w = img.shape[:2]
+    p1 = peak_down(img, max(1, w >> 3), max(1, h >> 3), 8, True)
+    p2 = peak_down(p1, 64, 36, 4, False)
+    l = np.maximum(p2[..., 3], 0.0)
+    wt = np.exp((l - l.max()) * 200.0)
+    gy, gx = np.mgrid[0:36, 0:64]
+    col = (p2[..., :3] * wt[..., None]).reshape(-1, 3).sum(0) / wt.sum()
+    return dict(x=float(((gx + 0.5) / 64 * wt).sum() / wt.sum()), y=float(((gy + 0.5) / 36 * wt).sum() / wt.sum()),
+                lum=float(l.max()), color=col / max(col.max(), 1e-4))
+
+
+def flare_layer(u, v, ar, p, col, prm):
+    """hz_flare と同じ。足す色（HxWx3）を返す"""
+    R = max(prm['flare_size'], 0.02)
+    dx, dy = (u - p[0]) * ar, v - p[1]
+    dist = np.sqrt(dx * dx + dy * dy)
+    core = np.exp(-(dist / (0.12 * R)) ** 2)
+    halo = np.exp(-((dist - 0.9 * R) / (0.06 * R)) ** 2) * 0.35
+    f = (core * 0.8 + halo)[..., None] * col
+    sy = dy / (0.012 * R + 0.002)
+    f = f + (np.exp(-np.abs(dx) / (2.2 * R)) * np.exp(-sy * sy) * prm['flare_streak'] * 0.9)[..., None] * col
+    for k in range(5):
+        m = 0.6 - 0.45 * k
+        gx, gy = 0.5 + (p[0] - 0.5) * m, 0.5 + (p[1] - 0.5) * m
+        rad = (0.14 + 0.2 * ((k * 0.618 + 0.3) % 1.0)) * R
+        dk = np.sqrt(((u - gx) * ar) ** 2 + (v - gy) ** 2)
+        disc = (1 - smoothstep(rad * 0.9, rad * 1.08, dk)) * (0.25 + 0.75 * smoothstep(0.4 * rad, rad, dk))
+        rb = 0.5 + 0.5 * np.cos(6.2832 * (k * 0.19 + np.array([0.0, 0.33, 0.67], np.float32)))
+        f = f + (disc * 0.28 * prm['flare_ghost'])[..., None] * (col + (rb - col) * 0.5)
+    return f
+
+
+# ---------------------------------------------------------------- 背景ぼかし（lensblur.effect と同じ）
+
+
+def bspline_up(src, u, v):
+    """3 次 B スプラインで補間する（lensblur.effect の hz_bspline。端は最も外側の画素で延長）"""
+    h, w = src.shape[:2]
+    px, py = u * w - 0.5, v * h - 0.5
+    ix, iy = np.floor(px).astype(int), np.floor(py).astype(int)
+    fx, fy = (px - ix).astype(np.float32), (py - iy).astype(np.float32)
+
+    def wts(f):
+        return [(1 - f) ** 3 / 6, (3 * f ** 3 - 6 * f ** 2 + 4) / 6, (-3 * f ** 3 + 3 * f ** 2 + 3 * f + 1) / 6, f ** 3 / 6]
+    wx, wy = wts(fx), wts(fy)
+    out = 0
+    for b in range(4):
+        row = 0
+        yy = np.clip(iy + b - 1, 0, h - 1)
+        for a in range(4):
+            xx = np.clip(ix + a - 1, 0, w - 1)
+            row = row + src[yy, xx] * wx[a][..., None]
+        out = out + row * wy[b][..., None]
+    return out
+
+
+LB_DISC_TARGET = 4.0  # src/lensblur-filter.c の DISC_TARGET と同じ
+
+
+def lens_blur(img, pct, bokeh=0.5, ramp=0.0):
+    """img: HxWx3 sRGB 0..1。pct = ぼかしの半径（画面の高さに対する %）。
+    線形光で、半径が 4 画素以下になるまで 1/2 ずつ縮めてから、64 点の円盤（黄金角のらせん）で平均する。
+    明るい点ほど重く数える（玉ボケ）。ramp は画面の上ほど強く、下ほど弱くする"""
+    h, w = img.shape[:2]
+    radius_px = pct * 0.01 * h
+    if radius_px < 0.5:
+        return img
+    n = 0
+    while n < 6 and radius_px / (1 << n) > LB_DISC_TARGET:
+        n += 1
+    img4 = np.concatenate([img, np.ones((h, w, 1), np.float32)], -1)
+
+    def to_lin(s):
+        a = s[..., 3:4]
+        return np.concatenate([srgb_to_lin(s[..., :3]) * a, a], -1)
+
+    if n == 0:
+        cur = to_lin(img4)
+        dw, dh = w, h
+    else:
+        cur = img4
+        for k in range(1, n + 1):
+            dw, dh = max(1, w >> k), max(1, h >> k)
+            cur = tap_down(cur, dw, dh, 2, to_lin if k == 1 else None)
+    u, v = _grid(dw, dh)
+    rs = (radius_px / (1 << n)) * (1.0 + (0.25 + 1.25 * (1.0 - v) - 1.0) * ramp)
+    acc, ws = 0, 0
+    for i in range(64):
+        rr = math.sqrt((i + 0.5) / 64.0) * rs
+        th = i * 2.39996323
+        smp = sample_bilinear(cur, u + math.cos(th) * rr / dw, v + math.sin(th) * rr / dh)
+        t = np.clip((smp[..., :3] @ LUMA - 0.4) / 0.6, 0, 1)
+        wt = (1.0 + bokeh * 12.0 * t * t)[..., None]
+        acc = acc + smp * wt
+        ws = ws + wt
+    disc = acc / ws
+    uf, vf = _grid(w, h)
+    o = bspline_up(disc, uf, vf) if n > 0 else sample_bilinear(disc, uf, vf)
+    a = o[..., 3:4]
+    return np.clip(lin_to_srgb(o[..., :3] / np.maximum(a, 1e-4)) * a, 0, 1)
 
 
 def finish(img, prm, leak_color=None):
@@ -474,13 +656,58 @@ def finish(img, prm, leak_color=None):
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     u = (xx + 0.5) / w
     v = (yy + 0.5) / h
-    c = img.copy()
+    img4 = np.concatenate([img, np.ones((h, w, 1), np.float32)], -1)
+    ar = w / h
 
     # ビネット重み（周辺ほど 1）
     dx = (u - 0.5) * (w / h)
     dy = v - 0.5
     r = np.sqrt(dx * dx + dy * dy) / math.sqrt((0.5 * w / h) ** 2 + 0.25)
     edge_w = smoothstep(0.2, 1.0, r)
+
+    # レンズ：周辺ボケと色収差
+    ca_amt, peri = prm.get('chromatic', 0.0), prm.get('peri_blur', 0.0)
+    if ca_amt > 1e-4 or peri > 1e-4:
+        t = peri * 2.0 * smoothstep(0.3, 1.0, r)
+        if peri > 1e-4:
+            p0, p1 = build_levels(img4, 2)
+
+        def fetch(uu, vv):
+            s0 = sample_bilinear(img4, uu, vv)
+            if peri > 1e-4:
+                b1, b2 = sample_bilinear(p0, uu, vv), sample_bilinear(p1, uu, vv)
+                tt = t[..., None]
+                s0 = np.where(tt < 1.0, s0 + (b1 - s0) * np.clip(tt, 0, 1), b1 + (b2 - b1) * np.clip(tt - 1.0, 0, 1))
+            return s0
+        sg = fetch(u, v)
+        if ca_amt > 1e-4:
+            ox, oy = (u - 0.5) * (ca_amt * 0.03 * r), (v - 0.5) * (ca_amt * 0.03 * r)
+            sr, sb = fetch(u + ox, v + oy), fetch(u - ox, v - oy)
+            sg = np.stack([sr[..., 0], sg[..., 1], sb[..., 2], sg[..., 3]], -1)
+        c = sg[..., :3].copy()
+    else:
+        c = img.copy()
+
+    # グロー
+    if prm.get('glow', 0.0) > 1e-4:
+        lv = build_levels(img4, 4, bright=prm['glow_threshold'])
+        c0 = prm['glow_size'] * 3.0
+        wk = [math.exp(-0.5 * (k - c0) ** 2 / 0.81) for k in range(4)]
+        l0h, l0w = lv[0].shape[:2]
+        mu, mv = _grid(l0w, l0h)  # GlowMix は段 0 の格子で 4 段を合成し、本体はそれを補間する
+        mix = sum(sample_bilinear(lv[k], mu, mv)[..., :3] * wk[k] for k in range(4)) / sum(wk)
+        g = sample_bilinear(mix, u, v) * (prm['glow'] * 2.5)
+        c = 1 - (1 - c) * (1 - np.clip(g, 0, 1))
+
+    # レンズフレア。光源は「最も明るい点」（1/8 の最大値 -> 64x36 の最大値 -> 最大輝度との差で exp(-200 * 差) の重みを付けた重心）
+    if prm.get('flare', 0.0) > 1e-4:
+        pk = peak_stats(img)
+        fp = (prm['flare_x'] + (pk['x'] - prm['flare_x']) * prm['flare_auto'],
+              prm['flare_y'] + (pk['y'] - prm['flare_y']) * prm['flare_auto'])
+        fcol = 1 + (pk['color'] - 1) * 0.6
+        inten = float(smoothstep(0.5, 0.9, pk['lum']))
+        f = flare_layer(u, v, ar, fp, fcol, prm) * (prm['flare'] * inten)
+        c = 1 - (1 - c) * (1 - np.clip(f, 0, 1))
 
     # 網点：回転した格子のセル中心の輝度で点の半径を決める
     cell = prm['halftone_cell']
@@ -595,9 +822,18 @@ def main():
     ap.add_argument('--y', type=float, default=1.0)
     ap.add_argument('--h', type=float, default=0.95)
     ap.add_argument('--finish', action='store_true')
+    ap.add_argument('--fin', action='append', default=[], metavar='名前=値', help='Finish の設定（複数可）')
+    ap.add_argument('--lens-blur', type=float, default=0.0, metavar='%', help='背景ぼかしの半径（画面の高さに対する %）')
+    ap.add_argument('--bokeh', type=float, default=0.5, help='背景ぼかしの玉ボケ（0..1）')
+    ap.add_argument('--ramp', type=float, default=0.0, help='背景ぼかしの奥行きの傾斜（0..1）')
     ap.add_argument('--compare', action='store_true', help='左に素の合成、右に処理後を並べる')
     a = ap.parse_args()
-    naive, harm = run(Image.open(a.bg), Image.open(a.fg), a.x, a.y, a.h, finish_on=a.finish)
+    bg_img = Image.open(a.bg).convert('RGB')
+    if a.lens_blur > 0:
+        bg_np = np.asarray(bg_img).astype(np.float32) / 255
+        bg_img = Image.fromarray((lens_blur(bg_np, a.lens_blur, a.bokeh, a.ramp) * 255 + 0.5).astype(np.uint8))
+    fin = {k: float(v) for k, v in (kv.split('=', 1) for kv in a.fin)}
+    naive, harm = run(bg_img, Image.open(a.fg), a.x, a.y, a.h, fin=fin, finish_on=a.finish or bool(fin))
     if a.compare:
         out = np.concatenate([naive, harm], 1)
     else:

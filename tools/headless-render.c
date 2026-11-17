@@ -7,6 +7,8 @@
  *     --finish                   シーンに Finish を付ける
  *     --set key=value            Harmonizer の設定（数値）。複数可
  *     --fset key=value           Finish の設定（数値）。複数可
+ *     --lensblur                 背景に「背景ぼかし」を付ける
+ *     --lset key=value           背景ぼかしの設定（数値）。複数可
  *     --frames N                 書き出すまでのフレーム数（既定 20）
  *
  * Linux 専用（X11 + EGL）。DISPLAY が必要（Xvfb で可）。
@@ -70,10 +72,11 @@ int main(int argc, char **argv)
 	}
 	const char *plugin = argv[1], *datadir = argv[2], *bgfile = argv[3], *fgfile = argv[4], *outfile = argv[5];
 	float px = 0.66f, py = 1.0f, ph = 1.0f;
-	bool harm = true, finish = false;
+	bool harm = true, finish = false, lensblur = false;
 	int nframes = 20;
 	obs_data_t *hset = obs_data_create();
 	obs_data_t *fset = obs_data_create();
+	obs_data_t *lset = obs_data_create();
 	for (int i = 6; i < argc; i++) {
 		if (!strcmp(argv[i], "--x") && i + 1 < argc)
 			px = (float)atof(argv[++i]);
@@ -89,6 +92,10 @@ int main(int argc, char **argv)
 			apply_kv(hset, argv[++i]);
 		else if (!strcmp(argv[i], "--fset") && i + 1 < argc)
 			apply_kv(fset, argv[++i]);
+		else if (!strcmp(argv[i], "--lensblur"))
+			lensblur = true;
+		else if (!strcmp(argv[i], "--lset") && i + 1 < argc)
+			apply_kv(lset, argv[++i]);
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc)
 			nframes = atoi(argv[++i]);
 	}
@@ -177,6 +184,15 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		obs_source_filter_add(fg, flt);
+		obs_source_release(flt);
+	}
+	if (lensblur) {
+		obs_source_t *flt = obs_source_create("obs_scene_relight_lensblur_filter", "lensblur", lset, NULL);
+		if (!flt) {
+			fprintf(stderr, "failed to create lensblur filter\n");
+			return 1;
+		}
+		obs_source_filter_add(bg, flt);
 		obs_source_release(flt);
 	}
 	if (finish) {
