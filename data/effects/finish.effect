@@ -1,4 +1,5 @@
-// obs-scene-relight Finish: 網点・グレイン・光漏れ・周辺減光
+// obs-scene-relight Finish: 撮影処理
+//   網点・グレイン・光漏れ・周辺減光・色収差・周辺ボケ・グロー・レンズフレア
 // tools/reference.py の finish() と同じ式
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -7,7 +8,17 @@
 uniform texture2d image;     // 入力（premultiplied, sRGB）
 uniform texture2d prev;      // 前フレームの光漏れ統計
 uniform texture2d leakstats; // 光漏れ統計 2x1: 0=(x, y, 0, 1) 1=(色 rgb, 1)
-uniform float2 texel;
+uniform texture2d flarestats; // フレア統計 2x1: 0=(光源の x, y, 光源の明るさ, 1) 1=(光源の色 rgb, 1)
+// OBS は 1 つのピクセルシェーダーで使えるテクスチャが 8 枚まで。本体（PSFinish）は 6 枚にしてある
+uniform texture2d glow0;     // グロー：明るい所だけを 1/4, 1/8, 1/16, 1/32 に縮めてぼかしたもの（GlowMix だけが使う）
+uniform texture2d glow1;
+uniform texture2d glow2;
+uniform texture2d glow3;
+uniform texture2d glowmix;   // 上の 4 段を glow_size に応じた重みで合成した 1/4 の画像
+uniform texture2d peri0;     // 周辺ボケ：画面全体を 1/4, 1/8 に縮めてぼかしたもの
+uniform texture2d peri1;
+uniform float2 texel;        // 縮小・ぼかしのパスでは「出力の 1 テクセル」。本体では入力の 1 テクセル
+uniform float2 blur_dir;
 uniform float2 size;         // 入力のピクセルサイズ
 uniform float blend;
 
@@ -25,6 +36,17 @@ uniform float2 leak_pos;
 uniform float3 leak_color;
 uniform float leak_auto_color;
 uniform float vignette;
+uniform float ca;            // 色収差
+uniform float peri;          // 周辺ボケ
+uniform float glow;
+uniform float glow_thr;
+uniform float glow_size;
+uniform float flare;
+uniform float flare_size;
+uniform float flare_auto;
+uniform float flare_streak;
+uniform float flare_ghost;
+uniform float2 flare_pos;
 
 // ---------------------------------------------------------------- 縮小 32x18
 
@@ -40,6 +62,141 @@ float4 PSDown(VertData v) : TARGET
 		}
 	}
 	return float4(acc / 64.0, 1.0);
+}
+
+// ---------------------------------------------------------------- グロー・周辺ボケの縮小とぼかし
+// いずれも texel = 出力の 1 テクセル（uv 単位）
+
+// 明るい所だけを残して 1/4 に縮める（4x4 点。縮める前の画素ごとにしきい値を掛ける）
+float4 PSBright(VertData v) : TARGET
+{
+	float3 acc = float3(0.0, 0.0, 0.0);
+	float thr = glow_thr;
+	for (int j = 0; j < 4; j++) {
+		for (int i = 0; i < 4; i++) {
+			float2 uv = v.uv + (float2(float(i), float(j)) + 0.5 - 2.0) / 4.0 * texel;
+			float3 c = image.SampleLevel(linearClamp, uv, 0.0).rgb;
+			float m = max(max(c.r, c.g), c.b);
+			acc += c * saturate((m - thr) / max(1.0 - thr, 0.02));
+		}
+	}
+	return float4(acc / 16.0, 1.0);
+}
+
+// 画面全体を 1/4 に縮める（4x4 点）
+float4 PSDown4(VertData v) : TARGET
+{
+	float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+	for (int j = 0; j < 4; j++) {
+		for (int i = 0; i < 4; i++) {
+			float2 uv = v.uv + (float2(float(i), float(j)) + 0.5 - 2.0) / 4.0 * texel;
+			acc += image.SampleLevel(linearClamp, uv, 0.0);
+		}
+	}
+	return acc / 16.0;
+}
+
+// 1/2 に縮める（2x2 点）
+float4 PSDown2(VertData v) : TARGET
+{
+	float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+	for (int j = 0; j < 2; j++) {
+		for (int i = 0; i < 2; i++) {
+			float2 uv = v.uv + (float2(float(i), float(j)) + 0.5 - 1.0) / 2.0 * texel;
+			acc += image.SampleLevel(linearClamp, uv, 0.0);
+		}
+	}
+	return acc / 4.0;
+}
+
+// ガウスぼかし（標準偏差 2 テクセル、9 点）。blur_dir = (1,0) か (0,1)
+float4 PSBlur(VertData v) : TARGET
+{
+	float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+	float ws = 0.0;
+	for (int i = -4; i <= 4; i++) {
+		float w = exp(-float(i * i) / 8.0);
+		acc += image.SampleLevel(linearClamp, v.uv + blur_dir * texel * float(i), 0.0) * w;
+		ws += w;
+	}
+	return acc / ws;
+}
+
+// グローの 4 段を、glow_size が選ぶ段を中心にした重みで合成する（出力は段 0 と同じ大きさ）
+float4 PSGlowMix(VertData v) : TARGET
+{
+	float c0 = glow_size * 3.0;
+	float w0 = exp(-0.5 * (0.0 - c0) * (0.0 - c0) / 0.81);
+	float w1 = exp(-0.5 * (1.0 - c0) * (1.0 - c0) / 0.81);
+	float w2 = exp(-0.5 * (2.0 - c0) * (2.0 - c0) / 0.81);
+	float w3 = exp(-0.5 * (3.0 - c0) * (3.0 - c0) / 0.81);
+	float3 g = glow0.SampleLevel(linearClamp, v.uv, 0.0).rgb * w0 + glow1.SampleLevel(linearClamp, v.uv, 0.0).rgb * w1 +
+		   glow2.SampleLevel(linearClamp, v.uv, 0.0).rgb * w2 + glow3.SampleLevel(linearClamp, v.uv, 0.0).rgb * w3;
+	return float4(g / (w0 + w1 + w2 + w3), 1.0);
+}
+
+// ---------------------------------------------------------------- フレアの光源探し
+// 平均ではなく「最も明るい点」を探す（小さな街灯が平均に埋もれないように）。
+// Peak8: 入力を 1/8 に縮める。8x8 画素のうち最も明るい画素の (色, 輝度)。texel = 出力の 1 テクセル
+float4 PSPeak8(VertData v) : TARGET
+{
+	float4 best = float4(0.0, 0.0, 0.0, -1.0);
+	for (int j = 0; j < 8; j++) {
+		for (int i = 0; i < 8; i++) {
+			float2 uv = v.uv + ((float2(float(i), float(j)) + 0.5) / 8.0 - 0.5) * texel;
+			float3 c = hz_unpremul(image.SampleLevel(linearClamp, uv, 0.0)).rgb;
+			float l = hz_luma(c);
+			best = (l > best.a) ? float4(c, l) : best;
+		}
+	}
+	return best;
+}
+
+// Peak4: (色, 輝度) の画像を 4x4 点のうち最も明るいもので縮める
+float4 PSPeak4(VertData v) : TARGET
+{
+	float4 best = float4(0.0, 0.0, 0.0, -1.0);
+	for (int j = 0; j < 4; j++) {
+		for (int i = 0; i < 4; i++) {
+			float2 uv = v.uv + ((float2(float(i), float(j)) + 0.5) / 4.0 - 0.5) * texel;
+			float4 c = image.SampleLevel(linearClamp, uv, 0.0);
+			best = (c.a > best.a) ? c : best;
+		}
+	}
+	return best;
+}
+
+// 64x36 の (色, 輝度) -> 2x1: 0=(光源の x, y, 最大の輝度, 1) 1=(光源の色 rgb, 1)
+// 最大の輝度との差に応じて急に減る重み exp(-200 * 差) の重心。広く白い所（空や白い服）に引きずられず、
+// 最も明るい点に付く。最大値が途中で更新されるたびに、それまでの合計を同じ比で縮める
+float4 PSFlareStats(VertData v) : TARGET
+{
+	float2 c = float2(0.0, 0.0);
+	float3 col = float3(0.0, 0.0, 0.0);
+	float ws = 0.0;
+	float m = 0.0;
+	for (int y = 0; y < 36; y++) {
+		for (int x = 0; x < 64; x++) {
+			float2 uv = (float2(float(x), float(y)) + 0.5) / float2(64.0, 36.0);
+			float4 p = image.SampleLevel(pointClamp, uv, 0.0);
+			float l = max(p.a, 0.0);
+			if (l > m) {
+				float sc = exp((m - l) * 200.0);
+				c *= sc;
+				col *= sc;
+				ws *= sc;
+				m = l;
+			}
+			float w = exp((l - m) * 200.0);
+			c += uv * w;
+			col += p.rgb * w;
+			ws += w;
+		}
+	}
+	col /= ws;
+	col /= max(max(col.r, col.g), max(col.b, 0.0001));
+	float4 cur = (v.uv.x < 0.5) ? float4(c / ws, m, 1.0) : float4(col, 1.0);
+	return lerp(prev.SampleLevel(pointClamp, v.uv, 0.0), cur, blend);
 }
 
 // ---------------------------------------------------------------- 光漏れの位置と色 2x1
@@ -68,6 +225,53 @@ float4 PSLeakStats(VertData v) : TARGET
 	return lerp(prev.SampleLevel(pointClamp, v.uv, 0.0), cur, blend);
 }
 
+// ---------------------------------------------------------------- レンズフレア
+
+// 光源 p（uv）から画面の中心を通る線上に、ゴースト・ハロー・横の筋を描く。戻りは足す色
+float3 hz_flare(float2 uv, float2 p, float3 col, float ar)
+{
+	float R = max(flare_size, 0.02);
+	float2 d = float2((uv.x - p.x) * ar, uv.y - p.y);
+	float dist = length(d);
+
+	// 光源のまわりの芯とハロー（輪）
+	float core = exp(-(dist / (0.12 * R)) * (dist / (0.12 * R)));
+	float ringd = (dist - 0.9 * R) / (0.06 * R);
+	float halo = exp(-ringd * ringd) * 0.35;
+	float3 f = col * (core * 0.8 + halo);
+
+	// 横の筋（アナモルフィック）
+	float sy = d.y / (0.012 * R + 0.002);
+	f += col * (exp(-abs(d.x) / (2.2 * R)) * exp(-sy * sy) * flare_streak * 0.9);
+
+	// ゴースト：光源と画面の中心を結ぶ線上の円。色は光源の色に虹色を混ぜる
+	for (int k = 0; k < 5; k++) {
+		float fk = float(k);
+		float m = 0.6 - 0.45 * fk;
+		float2 g = float2(0.5, 0.5) + (p - float2(0.5, 0.5)) * m;
+		float rad = (0.14 + 0.2 * frac(fk * 0.618 + 0.3)) * R;
+		float2 dg = float2((uv.x - g.x) * ar, uv.y - g.y);
+		float dk = length(dg);
+		float disc = (1.0 - smoothstep(rad * 0.9, rad * 1.08, dk)) * (0.25 + 0.75 * smoothstep(0.4 * rad, rad, dk));
+		float3 rb = float3(0.5, 0.5, 0.5) + 0.5 * cos(6.2832 * (fk * 0.19 + float3(0.0, 0.33, 0.67)));
+		f += lerp(col, rb, 0.5) * (disc * 0.28 * flare_ghost);
+	}
+	return f;
+}
+
+// ---------------------------------------------------------------- レンズ越しの 1 点（周辺ボケ）
+// 画面の周辺ほど、縮めてぼかした画像（peri0, peri1）に寄せる。t = 0..2
+float4 hz_lens_fetch(float2 uv, float t)
+{
+	float4 s = image.SampleLevel(linearClamp, uv, 0.0);
+	if (peri > 0.0001) {
+		float4 b1 = peri0.SampleLevel(linearClamp, uv, 0.0);
+		float4 b2 = peri1.SampleLevel(linearClamp, uv, 0.0);
+		s = (t < 1.0) ? lerp(s, b1, t) : lerp(b1, b2, t - 1.0);
+	}
+	return s;
+}
+
 // ---------------------------------------------------------------- 本体
 
 float hz_hash(float2 p)
@@ -77,8 +281,6 @@ float hz_hash(float2 p)
 
 float4 PSFinish(VertData v) : TARGET
 {
-	float4 src = hz_unpremul(image.SampleLevel(pointClamp, v.uv, 0.0));
-	float3 c = src.rgb;
 	float2 px = v.uv * size;
 	float ar = size.x / size.y;
 
@@ -87,14 +289,52 @@ float4 PSFinish(VertData v) : TARGET
 	float r = length(dc) / sqrt(0.25 * ar * ar + 0.25);
 	float edge_w = smoothstep(0.2, 1.0, r);
 
+	// レンズ：周辺ボケと色収差
+	float4 s0;
+	if (ca > 0.0001 || peri > 0.0001) {
+		float t = peri * 2.0 * smoothstep(0.3, 1.0, r);
+		float4 sg = hz_lens_fetch(v.uv, t);
+		s0 = sg;
+		if (ca > 0.0001) {
+			float2 off = (v.uv - float2(0.5, 0.5)) * (ca * 0.03 * r);
+			float4 sr = hz_lens_fetch(v.uv + off, t);
+			float4 sb = hz_lens_fetch(v.uv - off, t);
+			s0 = float4(sr.r, sg.g, sb.b, sg.a);
+		}
+	} else {
+		s0 = image.SampleLevel(pointClamp, v.uv, 0.0);
+	}
+	float4 src = hz_unpremul(s0);
+	float3 c = src.rgb;
+	float alpha = src.a;
+
+	// グロー（明るい所からにじむ光）。size は使うぼかしの段を選ぶ（0 = 狭い、1 = 広い）
+	if (glow > 0.0001) {
+		float3 g = glowmix.SampleLevel(linearClamp, v.uv, 0.0).rgb * (glow * 2.5);
+		c = hz_screen(c, g);
+		alpha = max(alpha, saturate(max(max(g.r, g.g), g.b)));
+	}
+
+	// レンズフレア
+	if (flare > 0.0001) {
+		float4 fs0 = flarestats.SampleLevel(pointClamp, float2(0.25, 0.5), 0.0);
+		float4 fs1 = flarestats.SampleLevel(pointClamp, float2(0.75, 0.5), 0.0);
+		float2 fp = flare_pos + (fs0.xy - flare_pos) * flare_auto;
+		float inten = smoothstep(0.5, 0.9, fs0.z);
+		float3 fcol = lerp(float3(1.0, 1.0, 1.0), fs1.rgb, 0.6);
+		float3 f = hz_flare(v.uv, fp, fcol, ar) * (flare * inten);
+		c = hz_screen(c, f);
+		alpha = max(alpha, saturate(max(max(f.r, f.g), f.b)));
+	}
+
 	// 網点
 	if (halftone > 0.0001) {
 		float cell = max(halftone_cell, 2.0);
-		float ca = cos(halftone_angle);
+		float ca_ = cos(halftone_angle);
 		float sa = sin(halftone_angle);
-		float2 p = float2(px.x * ca + px.y * sa, -px.x * sa + px.y * ca);
+		float2 p = float2(px.x * ca_ + px.y * sa, -px.x * sa + px.y * ca_);
 		float2 cc = (floor(p / cell) + 0.5) * cell;
-		float2 sp = float2(cc.x * ca - cc.y * sa, cc.x * sa + cc.y * ca);
+		float2 sp = float2(cc.x * ca_ - cc.y * sa, cc.x * sa + cc.y * ca_);
 		float cl = hz_luma(hz_unpremul(image.SampleLevel(linearClamp, sp / size, 0.0)).rgb);
 		float rad = sqrt(saturate(1.0 - cl)) * cell * 0.62;
 		float d = length(p - cc);
@@ -127,7 +367,7 @@ float4 PSFinish(VertData v) : TARGET
 	}
 
 	c = saturate(c);
-	return float4(c * src.a, src.a);
+	return float4(c * alpha, alpha);
 }
 
 technique Down
@@ -136,6 +376,78 @@ technique Down
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSDown(v);
+	}
+}
+
+technique Bright
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBright(v);
+	}
+}
+
+technique Down4
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDown4(v);
+	}
+}
+
+technique Down2
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDown2(v);
+	}
+}
+
+technique GlowMix
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSGlowMix(v);
+	}
+}
+
+technique Blur
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlur(v);
+	}
+}
+
+technique Peak8
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPeak8(v);
+	}
+}
+
+technique Peak4
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPeak4(v);
+	}
+}
+
+technique FlareStats
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSFlareStats(v);
 	}
 }
 

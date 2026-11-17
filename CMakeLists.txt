@@ -23,7 +23,7 @@ endif()
 
 target_sources(
   ${CMAKE_PROJECT_NAME}
-  PRIVATE src/plugin-main.c src/hz-util.c src/harmonizer-filter.c src/finish-filter.c
+  PRIVATE src/plugin-main.c src/hz-util.c src/harmonizer-filter.c src/finish-filter.c src/lensblur-filter.c
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

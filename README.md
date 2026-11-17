@@ -5,7 +5,7 @@
 
 1.0.0 までは「OBS Harmonizer (obs-harmonizer)」という名前でした。1.0.0 から入れ替える場合は、下の「1.0.0 からの入れ替え」を見てください。
 
-*English: OBS filters that automatically match a foreground (avatar / character art) to a background source — the scene's light color and brightness, shade, light from bright sources in the background (street lamps, windows, signs) and rim light — plus a finishing filter (halftone, grain, light leak). GPU only, no CPU readback. GPL-2.0-or-later.*
+*English: OBS filters that automatically match a foreground (avatar / character art) to a background source — the scene's light color and brightness, shade, light from bright sources in the background (street lamps, windows, signs) and rim light — plus a "camera look" finishing filter (halftone, grain, light leak, chromatic aberration, edge blur, glow, lens flare) and a lens background-blur filter (bokeh). GPU only, no CPU readback. GPL-2.0-or-later.*
 
 ## できること
 
@@ -24,9 +24,9 @@
 
 前景と背景が同じシーンにあれば、シーン内の配置（位置・拡大率・回転）を自動で読みます。
 
-### 2. 仕上げ：網点・グレイン・光漏れ (Scene Relight)
+### 2. 仕上げ：撮影処理 (Scene Relight)
 
-前景と背景にまとめて掛けることで、同じカメラで撮った雰囲気を表現します。
+前景と背景にまとめて掛けることで、同じカメラで撮った雰囲気を表現します。アニメ絵に「撮影処理」（カメラで撮ったような質感）を足す仕上げ用です。
 
 | 項目 | 内容 |
 | --- | --- |
@@ -34,12 +34,37 @@
 | グレイン | フィルムの粒子。フレームごとに動かせます |
 | 光漏れ | 画面の一番明るい所の外側から光が差し込みます。位置と色は自動か手動を選択できます。 |
 | 周辺減光 | ビネット |
+| 色収差 | 画面の周辺ほど、赤と青が放射方向にずれます（レンズのクセ）。中心は変わりません |
+| 周辺ボケ | 画面の端だけをぼかします。中心はそのままです |
+| グロー | 明るい所（窓・街灯・白い服・目のハイライト）からにじむ光です。しきい値と広がりを選べます |
+| レンズフレア | 画面の一番明るい点に、芯・ハロー（輪）・横に伸びる筋・ゴースト（光の粒）を足します。位置は自動か手動。明るい点がない画面には出ません |
+
+1.3.0 で足した 4 項目（色収差・周辺ボケ・グロー・レンズフレア）の量の初期値は 0 です。入れ替えても、今までのシーンの見た目は変わりません。
+
+### 3. 背景ぼかし：レンズ (Scene Relight)
+
+**背景のソース**に掛けると、立ち絵（別のソース）はそのままで、背景だけが本物のカメラのピンぼけのようにぼけます。
+
+| 項目 | 内容 |
+| --- | --- |
+| ぼかしの大きさ | 半径を画面の高さに対する割合で指定します（解像度が変わっても同じ見た目）。 |
+| 玉ボケ | 明るい点（窓・街灯）を丸く大きなぼけにします。 |
+| 奥行きの傾斜 | 画面の上（遠く）ほど強く、下（手前）ほど弱くぼかします。 |
+
+「背景になじませる」は、背景ソースのフィルターを通した後の映像を読みます。背景にこのフィルターを掛けると、ぼかした背景の色と光に前景がなじみます。
+
+### 目のハイライトについて
+
+目のハイライトを切り出して作り直す処理は、キャラクターごとに目の位置とマスクが必要な手作業なので、このプラグインでは自動化していません。立ち絵の元画像にハイライトを描き足すか、OBS 標準の「画像マスク/ブレンド」フィルターで切り出してください。そのハイライトのにじみは、仕上げの「グロー」で足せます。
 
 ## 使い方
 
 1. 背景（画像・動画・シーンなど）と前景（立ち絵・アバター）を同じシーンに置く
 2. 前景のソースにフィルター「背景になじませる (Scene Relight)」を追加し、「背景ソース」で背景を選ぶ
-3. 必要ならシーン（またはグループ）にフィルター「仕上げ：網点・グレイン・光漏れ (Scene Relight)」を追加する
+3. 背景をぼかしたいときは、**背景のソース**にフィルター「背景ぼかし：レンズ (Scene Relight)」を追加する
+4. 必要ならシーン（またはグループ）にフィルター「仕上げ：撮影処理 (Scene Relight)」を追加する（網点・グレイン・光漏れ・周辺減光・色収差・周辺ボケ・グロー・レンズフレア）
+
+動画編集ソフトの「撮影処理」の流れ（背景ぼかし → 目のハイライト → 色収差 → レンズフレア → フィルム調の仕上げ）は、背景ぼかし＝手順 3、色収差・レンズフレア・グレイン・周辺減光・周辺ボケ＝手順 4 で組めます。
 
 ## 仕組みと負荷
 
@@ -55,10 +80,24 @@
 
 統計と 2 つのマップは前フレームとの指数平滑で、ちらつきを抑えます。
 
+仕上げと背景ぼかしも GPU だけで処理します。重い処理は縮小した画像の上で行います。
+
+- グロー：明るい所だけを 1/4 に縮め、1/8・1/16・1/32 と縮めながらぼかした 4 段を、広がりの設定で合成します。
+- 周辺ボケ：画面を 1/4 と 1/8 に縮めてぼかしたものを、周辺ほど混ぜます。
+- レンズフレア：入力を 1/8 → 64x36 と「最も明るい画素」で縮め、最大の明るさにほぼ限った重心を光源にします（時間方向になめらかに追従）。
+- 背景ぼかし：線形光に直し、半径が 4 画素以下になるまで 1/2 ずつ縮めて、64 点の円盤状にぼかし、3 次 B スプラインで拡大します。ぼかしを大きくしても負荷はほぼ増えません。
+
 参照実装（numpy）が `tools/reference.py` にあります。シェーダーと同じ式で、見た目の検討に使うことができますので、ご活用下さい。
 
 ```
 python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png --compare --finish
+```
+
+仕上げの新しい項目や背景ぼかしも、同じ式で試せます（`--fin` は Finish の設定、`--lens-blur` は背景ぼかしの半径 %）。
+
+```
+python3 tools/reference.py --bg 背景.jpg --fg 立ち絵.png --out out.png --compare \
+    --lens-blur 2 --fin glow=0.5 --fin flare=0.6 --fin chromatic=0.3 --fin peri_blur=0.4
 ```
 
 ## インストール
